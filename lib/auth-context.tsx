@@ -57,6 +57,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         setAccessToken(session.accessToken);
         setUser(session.user);
+      } catch {
+        // Ignore storage/network errors on startup; user can log in again.
       } finally {
         if (isMounted) {
           setIsLoading(false);

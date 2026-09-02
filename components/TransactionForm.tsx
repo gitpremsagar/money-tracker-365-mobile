@@ -11,12 +11,13 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { TYPE_COLORS, TYPE_LABEL } from '@/lib/format';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -45,6 +46,7 @@ export default function TransactionForm({ transaction }: Props) {
     transaction ? new Date(transaction.date) : new Date(),
   );
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoadingCats, setIsLoadingCats] = useState(true);
@@ -121,6 +123,54 @@ export default function TransactionForm({ transaction }: Props) {
       setError(err instanceof Error ? err.message : 'Failed to delete transaction');
       setIsDeleting(false);
       setConfirmOpen(false);
+    }
+  }
+
+  function openDatePicker() {
+    if (Platform.OS === 'android') {
+      setPickerMode('date');
+    }
+    setShowDatePicker(true);
+  }
+
+  function handleDateChange(event: DateTimePickerEvent, selectedDate?: Date) {
+    if (Platform.OS === 'android') {
+      if (event.type === 'dismissed') {
+        setShowDatePicker(false);
+        setPickerMode('date');
+        return;
+      }
+
+      if (event.type !== 'set' || !selectedDate) {
+        return;
+      }
+
+      if (pickerMode === 'date') {
+        setDate((current) => {
+          const next = new Date(current);
+          next.setFullYear(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate());
+          return next;
+        });
+        setShowDatePicker(false);
+        setTimeout(() => {
+          setPickerMode('time');
+          setShowDatePicker(true);
+        }, 0);
+        return;
+      }
+
+      setDate((current) => {
+        const next = new Date(current);
+        next.setHours(selectedDate.getHours(), selectedDate.getMinutes(), 0, 0);
+        return next;
+      });
+      setShowDatePicker(false);
+      setPickerMode('date');
+      return;
+    }
+
+    if (selectedDate) {
+      setDate(selectedDate);
     }
   }
 
@@ -210,7 +260,7 @@ export default function TransactionForm({ transaction }: Props) {
 
         <Text style={[styles.label, { color: theme.colors.text }]}>Date & Time</Text>
         <Pressable
-          onPress={() => setShowDatePicker(true)}
+          onPress={openDatePicker}
           style={[styles.inputWrap, { borderColor: theme.border, backgroundColor: theme.card }]}>
           <Text style={{ color: theme.colors.text }}>
             {date.toLocaleString('en-IN', {
@@ -222,15 +272,31 @@ export default function TransactionForm({ transaction }: Props) {
             })}
           </Text>
         </Pressable>
-        {showDatePicker && (
+        {Platform.OS === 'ios' && showDatePicker && (
+          <Modal transparent animationType="slide" visible={showDatePicker}>
+            <View style={styles.pickerOverlay}>
+              <View style={[styles.pickerSheet, { backgroundColor: theme.card }]}>
+                <View style={styles.pickerHeader}>
+                  <Pressable onPress={() => setShowDatePicker(false)}>
+                    <Text style={{ color: theme.primary, fontWeight: '600' }}>Done</Text>
+                  </Pressable>
+                </View>
+                <DateTimePicker
+                  value={date}
+                  mode="datetime"
+                  display="spinner"
+                  onChange={handleDateChange}
+                />
+              </View>
+            </View>
+          </Modal>
+        )}
+        {Platform.OS === 'android' && showDatePicker && (
           <DateTimePicker
             value={date}
-            mode="datetime"
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={(_, selected) => {
-              setShowDatePicker(Platform.OS === 'ios');
-              if (selected) setDate(selected);
-            }}
+            mode={pickerMode}
+            display="default"
+            onChange={handleDateChange}
           />
         )}
 
@@ -378,5 +444,22 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     alignItems: 'center',
+  },
+  pickerOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  pickerSheet: {
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: 24,
+  },
+  pickerHeader: {
+    alignItems: 'flex-end',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e4e4e7',
   },
 });

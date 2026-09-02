@@ -30,7 +30,7 @@ export default function AppLayout() {
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
         name="transactions/new"
-        options={{ headerShown: true, title: 'Add Transaction', presentation: 'modal' }}
+        options={{ headerShown: true, title: 'Add Transaction' }}
       />
       <Stack.Screen
         name="transactions/[id]"
@@ -38,7 +38,7 @@ export default function AppLayout() {
       />
       <Stack.Screen
         name="transactions/[id]/edit"
-        options={{ headerShown: true, title: 'Edit Transaction', presentation: 'modal' }}
+        options={{ headerShown: true, title: 'Edit Transaction' }}
       />
     </Stack>
   );

@@ -1,6 +1,7 @@
 import * as tokenStore from './token-store';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3710';
+// const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3710';
+const API_URL = "https://expense-tracker-api-gules-five.vercel.app";
 
 export type AuthUser = {
   id: string;
