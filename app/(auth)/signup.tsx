@@ -59,7 +59,7 @@ export default function SignupScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <Text style={[styles.title, { color: theme.colors.text }]}>Create account</Text>
-          <Text style={[styles.subtitle, { color: theme.muted }]}>Start tracking your expenses</Text>
+          <Text style={[styles.subtitle, { color: theme.muted }]}>Create your Money Tracker 365 account</Text>
 
           <Text style={[styles.label, { color: theme.colors.text }]}>Name</Text>
           <TextInput

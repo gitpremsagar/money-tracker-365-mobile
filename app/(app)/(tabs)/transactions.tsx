@@ -1,5 +1,6 @@
 import ConfirmDialog from '@/components/ConfirmDialog';
 import EmptyState from '@/components/EmptyState';
+import MonthPicker from '@/components/MonthPicker';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import {
   deleteTransaction,
@@ -30,7 +31,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 
@@ -171,14 +171,17 @@ export default function TransactionsScreen() {
         </Pressable>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersScroll}>
-        <TextInput
-          value={month}
-          onChangeText={(v) => { setMonth(v); setPage(1); }}
-          placeholder="YYYY-MM"
-          placeholderTextColor={theme.muted}
-          style={[styles.filterInput, { borderColor: theme.border, backgroundColor: theme.card, color: theme.colors.text }]}
+      <View style={styles.monthFilter}>
+        <MonthPicker
+          month={month}
+          onChange={(next) => {
+            setMonth(next);
+            setPage(1);
+          }}
         />
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersScroll}>
         {TYPE_OPTIONS.map((opt) => (
           <Pressable
             key={opt.value || 'all'}
@@ -300,8 +303,8 @@ export default function TransactionsScreen() {
 const styles = StyleSheet.create({
   topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8 },
   addBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  monthFilter: { paddingHorizontal: 16, marginTop: 12 },
   filtersScroll: { paddingHorizontal: 16, marginTop: 12, maxHeight: 44 },
-  filterInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginRight: 8, minWidth: 100, fontSize: 13 },
   filterChip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, marginRight: 8 },
   row: { flexDirection: 'row', alignItems: 'center', borderRadius: 14, borderWidth: 1, marginBottom: 8, overflow: 'hidden' },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },

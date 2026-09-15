@@ -31,19 +31,21 @@ const TYPES: CategoryType[] = ['EXPENSE', 'INCOME', 'SAVING', 'INVESTMENT'];
 
 type Props = {
   transaction?: Transaction;
+  initialType?: CategoryType;
+  initialDate?: Date;
 };
 
-export default function TransactionForm({ transaction }: Props) {
+export default function TransactionForm({ transaction, initialType, initialDate }: Props) {
   const { accessToken } = useAuth();
   const router = useRouter();
   const theme = useThemeColors();
 
-  const [type, setType] = useState<CategoryType>(transaction?.type ?? 'EXPENSE');
+  const [type, setType] = useState<CategoryType>(transaction?.type ?? initialType ?? 'EXPENSE');
   const [amount, setAmount] = useState(transaction ? String(transaction.amount) : '');
   const [categoryId, setCategoryId] = useState(transaction?.categoryId ?? '');
   const [note, setNote] = useState(transaction?.note ?? '');
   const [date, setDate] = useState(
-    transaction ? new Date(transaction.date) : new Date(),
+    transaction ? new Date(transaction.date) : initialDate ?? new Date(),
   );
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');

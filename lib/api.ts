@@ -269,6 +269,7 @@ export type ListTransactionsResult = {
 
 export type ListTransactionsParams = {
   month?: string;
+  year?: number;
   type?: CategoryType;
   categoryId?: string;
   page?: number;
@@ -293,6 +294,7 @@ export async function listTransactions(
 ): Promise<ListTransactionsResult> {
   const qs = new URLSearchParams();
   if (params.month) qs.set('month', params.month);
+  if (params.year) qs.set('year', String(params.year));
   if (params.type) qs.set('type', params.type);
   if (params.categoryId) qs.set('categoryId', params.categoryId);
   if (params.page) qs.set('page', String(params.page));
@@ -332,6 +334,104 @@ export async function deleteTransaction(id: string, accessToken: string): Promis
   });
 }
 
+export type DebtType = 'TAKEN' | 'GIVEN';
+export type DebtStatus = 'ACTIVE' | 'SETTLED';
+
+export type Debt = {
+  id: string;
+  type: DebtType;
+  partyName: string;
+  amount: number;
+  description: string | null;
+  date: string;
+  status: DebtStatus;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DebtPagination = {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+export type ListDebtsResult = {
+  debts: Debt[];
+  pagination: DebtPagination;
+};
+
+export type ListDebtsParams = {
+  type?: DebtType;
+  status?: DebtStatus;
+  page?: number;
+  limit?: number;
+};
+
+export async function createDebt(
+  input: { type: DebtType; partyName: string; amount: number; description?: string; date?: string },
+  accessToken: string,
+): Promise<Debt> {
+  const res = await apiFetch<{ debt: Debt }>('/debts', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+  return res.debt;
+}
+
+export async function listDebts(
+  params: ListDebtsParams,
+  accessToken: string,
+): Promise<ListDebtsResult> {
+  const qs = new URLSearchParams();
+  if (params.type) qs.set('type', params.type);
+  if (params.status) qs.set('status', params.status);
+  if (params.page) qs.set('page', String(params.page));
+  if (params.limit) qs.set('limit', String(params.limit));
+  const query = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch<ListDebtsResult>(`/debts${query}`, {
+    method: 'GET',
+    accessToken,
+  });
+}
+
+export async function getDebt(id: string, accessToken: string): Promise<Debt> {
+  const res = await apiFetch<{ debt: Debt }>(`/debts/${id}`, {
+    method: 'GET',
+    accessToken,
+  });
+  return res.debt;
+}
+
+export async function updateDebt(
+  id: string,
+  input: {
+    type?: DebtType;
+    partyName?: string;
+    amount?: number;
+    description?: string | null;
+    date?: string;
+    status?: DebtStatus;
+  },
+  accessToken: string,
+): Promise<Debt> {
+  const res = await apiFetch<{ debt: Debt }>(`/debts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+  return res.debt;
+}
+
+export async function deleteDebt(id: string, accessToken: string): Promise<void> {
+  await apiFetch<{ message: string }>(`/debts/${id}`, {
+    method: 'DELETE',
+    accessToken,
+  });
+}
+
 export type CategoryBreakdownItem = {
   id: string;
   name: string;
@@ -366,3 +466,32 @@ export async function getMonthlyReport(month: string, accessToken: string): Prom
   });
   return res.report;
 }
+
+export type MonthlyTotalItem = {
+  month: string;
+  income: number;
+  expense: number;
+  saving: number;
+  investment: number;
+};
+
+export type AnnualReport = {
+  year: number;
+  totalIncome: number;
+  totalExpense: number;
+  totalSaving: number;
+  totalInvestment: number;
+  netBalance: number;
+  categoryBreakdown: CategoryBreakdownItem[];
+  monthlyTotals: MonthlyTotalItem[];
+};
+
+export async function getAnnualReport(year: number, accessToken: string): Promise<AnnualReport> {
+  const res = await apiFetch<{ report: AnnualReport }>(`/reports/annual?year=${year}`, {
+    method: 'GET',
+    accessToken,
+  });
+  return res.report;
+}
+
+export type ReportPeriod = { kind: 'month'; month: string } | { kind: 'year'; year: number };

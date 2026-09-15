@@ -40,6 +40,18 @@ export default function AppLayout() {
         name="transactions/[id]/edit"
         options={{ headerShown: true, title: 'Edit Transaction' }}
       />
+      <Stack.Screen
+        name="debts/new"
+        options={{ headerShown: true, title: 'Add Debt' }}
+      />
+      <Stack.Screen
+        name="debts/[id]"
+        options={{ headerShown: true, title: 'Debt' }}
+      />
+      <Stack.Screen
+        name="debts/[id]/edit"
+        options={{ headerShown: true, title: 'Edit Debt' }}
+      />
     </Stack>
   );
 }

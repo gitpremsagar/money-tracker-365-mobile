@@ -1,7 +1,7 @@
 import EmptyState from '@/components/EmptyState';
 import StatCard from '@/components/StatCard';
 import { useThemeColors } from '@/hooks/use-theme-colors';
-import { getMonthlyReport, listTransactions, type MonthlyReport, type Transaction } from '@/lib/api';
+import { getMonthlyReport, listDebts, listTransactions, type Debt, type MonthlyReport, type Transaction } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import {
   TYPE_COLORS,
@@ -13,8 +13,8 @@ import {
   typeIcon,
 } from '@/lib/format';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, type Href } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useFocusEffect, useRouter, type Href } from 'expo-router';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -25,45 +25,67 @@ import {
 } from 'react-native';
 
 export default function DashboardScreen() {
-  const { user, accessToken } = useAuth();
+  const { user, accessToken, logout } = useAuth();
   const router = useRouter();
   const theme = useThemeColors();
 
   const [report, setReport] = useState<MonthlyReport | null>(null);
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
+  const [activeDebts, setActiveDebts] = useState<Debt[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const month = currentMonth();
   const monthLabelText = monthLabel(month);
+  const debtTaken = activeDebts.filter((debt) => debt.type === 'TAKEN').reduce((sum, debt) => sum + debt.amount, 0);
+  const debtGiven = activeDebts.filter((debt) => debt.type === 'GIVEN').reduce((sum, debt) => sum + debt.amount, 0);
 
-  useEffect(() => {
+  const loadDashboard = useCallback(async () => {
     if (!accessToken) return;
-
-    void (async () => {
-      setIsLoading(true);
-      try {
-        const [rep, txResult] = await Promise.all([
-          getMonthlyReport(month, accessToken),
-          listTransactions({ month, page: 1, limit: 5 }, accessToken),
-        ]);
-        setReport(rep);
-        setRecentTransactions(txResult.transactions);
-      } catch {
-        // show empty state
-      } finally {
-        setIsLoading(false);
-      }
-    })();
+    setIsLoading(true);
+    try {
+      const [rep, txResult, debtResult] = await Promise.all([
+        getMonthlyReport(month, accessToken),
+        listTransactions({ month, page: 1, limit: 5 }, accessToken),
+        listDebts({ status: 'ACTIVE', limit: 100 }, accessToken),
+      ]);
+      setReport(rep);
+      setRecentTransactions(txResult.transactions);
+      setActiveDebts(debtResult.debts);
+    } catch {
+      // show empty state
+    } finally {
+      setIsLoading(false);
+    }
   }, [accessToken, month]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadDashboard();
+    }, [loadDashboard]),
+  );
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={styles.container}>
       <View style={styles.header}>
-        <View>
+        <View style={{ flex: 1, marginRight: 12 }}>
           <Text style={[styles.greeting, { color: theme.colors.text }]}>
             Hello, {user?.name?.split(' ')[0]} 👋
           </Text>
+          {user?.name ? (
+            <Text style={[styles.accountName, { color: theme.colors.text }]} numberOfLines={1}>
+              {user.name}
+            </Text>
+          ) : null}
+          {user?.email ? (
+            <Text style={[styles.accountEmail, { color: theme.muted }]} numberOfLines={1}>
+              {user.email}
+            </Text>
+          ) : null}
           <Text style={[styles.subtitle, { color: theme.muted }]}>{monthLabelText} summary</Text>
+          <Pressable onPress={() => void logout()} style={styles.logoutButton}>
+            <Ionicons name="log-out-outline" size={16} color={theme.muted} />
+            <Text style={{ color: theme.muted, fontWeight: '600', fontSize: 14 }}>Log out</Text>
+          </Pressable>
         </View>
         <Pressable
           onPress={() => router.push('/(app)/transactions/new')}
@@ -86,6 +108,8 @@ export default function DashboardScreen() {
             value={`${report.netBalance >= 0 ? '+' : ''}${formatCurrency(report.netBalance)}`}
             color={report.netBalance >= 0 ? 'blue' : 'red'}
           />
+          <StatCard label="Debt Taken" value={formatCurrency(debtTaken)} color="red" />
+          <StatCard label="Debt Given" value={formatCurrency(debtGiven)} color="green" />
         </View>
       ) : null}
 
@@ -135,8 +159,11 @@ export default function DashboardScreen() {
         {(
           [
             { label: 'Add Transaction', route: '/(app)/transactions/new' as Href, icon: 'add-circle-outline' as const },
+            { label: 'Add Debt', route: '/(app)/debts/new' as Href, icon: 'card-outline' as const },
             { label: 'Categories', route: '/(app)/(tabs)/categories' as Href, icon: 'pricetags-outline' as const },
-            { label: 'Report', route: '/(app)/(tabs)/reports' as Href, icon: 'bar-chart-outline' as const },
+            { label: 'Monthly Report', route: { pathname: '/(app)/(tabs)/reports', params: { view: 'monthly' } } as Href, icon: 'bar-chart-outline' as const },
+            { label: 'Annual Report', route: { pathname: '/(app)/(tabs)/reports', params: { view: 'annual' } } as Href, icon: 'calendar-outline' as const },
+            { label: 'All Debts', route: '/(app)/(tabs)/debts' as Href, icon: 'wallet-outline' as const },
             { label: 'All Transactions', route: '/(app)/(tabs)/transactions' as Href, icon: 'list-outline' as const },
           ] as const
         ).map((item) => (
@@ -157,7 +184,10 @@ const styles = StyleSheet.create({
   container: { padding: 16, paddingBottom: 32 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
   greeting: { fontSize: 22, fontWeight: '700' },
+  accountName: { fontSize: 14, fontWeight: '600', marginTop: 6 },
+  accountEmail: { fontSize: 12, marginTop: 2 },
   subtitle: { fontSize: 14, marginTop: 4 },
+  logoutButton: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, alignSelf: 'flex-start' },
   addButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   addText: { color: '#fff', fontWeight: '600', fontSize: 14 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 },

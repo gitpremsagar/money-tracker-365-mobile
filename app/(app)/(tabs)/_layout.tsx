@@ -1,12 +1,9 @@
-import { useAuth } from '@/lib/auth-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { Pressable } from 'react-native';
 
 export default function TabLayout() {
   const theme = useThemeColors();
-  const { logout } = useAuth();
 
   return (
     <Tabs
@@ -26,11 +23,6 @@ export default function TabLayout() {
         options={{
           title: 'Dashboard',
           tabBarIcon: ({ color, size }) => <Ionicons name="grid-outline" size={size} color={color} />,
-          headerRight: () => (
-            <Pressable onPress={() => void logout()} style={{ marginRight: 16 }}>
-              <Ionicons name="log-out-outline" size={22} color={theme.muted} />
-            </Pressable>
-          ),
         }}
       />
       <Tabs.Screen
@@ -38,6 +30,13 @@ export default function TabLayout() {
         options={{
           title: 'Transactions',
           tabBarIcon: ({ color, size }) => <Ionicons name="list-outline" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="debts"
+        options={{
+          title: 'Debts',
+          tabBarIcon: ({ color, size }) => <Ionicons name="card-outline" size={size} color={color} />,
         }}
       />
       <Tabs.Screen

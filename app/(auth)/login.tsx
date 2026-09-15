@@ -49,8 +49,8 @@ export default function LoginScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-          <Text style={[styles.title, { color: theme.colors.text }]}>Expense Tracker</Text>
-          <Text style={[styles.subtitle, { color: theme.muted }]}>Sign in to your account</Text>
+          <Text style={[styles.title, { color: theme.colors.text }]}>Money Tracker 365</Text>
+          <Text style={[styles.subtitle, { color: theme.muted }]}>Access your Money Tracker 365 account</Text>
 
           <Text style={[styles.label, { color: theme.colors.text }]}>Email</Text>
           <TextInput

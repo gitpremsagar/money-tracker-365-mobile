@@ -4,6 +4,7 @@ import { useThemeColors } from '@/hooks/use-theme-colors';
 type Props = {
   label: string;
   value: string;
+  sub?: string;
   color?: 'green' | 'red' | 'blue' | 'purple' | 'default';
 };
 
@@ -15,7 +16,7 @@ const colorMap = {
   default: { bg: '#f4f4f5', text: '#18181b' },
 };
 
-export default function StatCard({ label, value, color = 'default' }: Props) {
+export default function StatCard({ label, value, sub, color = 'default' }: Props) {
   const theme = useThemeColors();
   const c = colorMap[color];
 
@@ -26,6 +27,7 @@ export default function StatCard({ label, value, color = 'default' }: Props) {
       </View>
       <Text style={[styles.label, { color: theme.muted }]}>{label.toUpperCase()}</Text>
       <Text style={[styles.value, { color: theme.colors.text }]}>{value}</Text>
+      {sub ? <Text style={[styles.sub, { color: theme.muted }]}>{sub}</Text> : null}
     </View>
   );
 }
@@ -60,5 +62,9 @@ const styles = StyleSheet.create({
   value: {
     fontSize: 20,
     fontWeight: '700',
+  },
+  sub: {
+    fontSize: 12,
+    marginTop: 4,
   },
 });
