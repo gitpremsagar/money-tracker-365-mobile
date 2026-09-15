@@ -18,7 +18,10 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://expense-tracker-api-gules-five.vercel.app"
+      }
     }
   },
   "submit": {
