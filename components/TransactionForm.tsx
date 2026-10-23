@@ -1,5 +1,6 @@
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useThemeColors } from '@/hooks/use-theme-colors';
+import { evaluateAmountExpression } from '@/lib/amount-math';
 import {
   createTransaction,
   deleteTransaction,
@@ -10,10 +11,11 @@ import {
   type Transaction,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { TYPE_COLORS, TYPE_LABEL } from '@/lib/format';
+import { TYPE_COLORS, TYPE_LABEL, formatCurrency } from '@/lib/format';
+import { useHeaderHeight } from '@react-navigation/elements';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -39,6 +41,7 @@ export default function TransactionForm({ transaction, initialType, initialDate 
   const { accessToken } = useAuth();
   const router = useRouter();
   const theme = useThemeColors();
+  const headerHeight = useHeaderHeight();
 
   const [type, setType] = useState<CategoryType>(transaction?.type ?? initialType ?? 'EXPENSE');
   const [amount, setAmount] = useState(transaction ? String(transaction.amount) : '');
@@ -56,6 +59,10 @@ export default function TransactionForm({ transaction, initialType, initialDate 
   const [isDeleting, setIsDeleting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const evaluatedAmount = useMemo(() => evaluateAmountExpression(amount), [amount]);
+  const showAmountPreview =
+    evaluatedAmount != null && amount.trim() !== '' && !/^\d+(\.\d+)?$/.test(amount.trim());
 
   useEffect(() => {
     if (!accessToken) return;
@@ -78,9 +85,9 @@ export default function TransactionForm({ transaction, initialType, initialDate 
   async function handleSubmit() {
     if (!accessToken) return;
 
-    const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      setError('Please enter a valid positive amount');
+    const parsedAmount = evaluateAmountExpression(amount);
+    if (parsedAmount == null) {
+      setError('Please enter a valid positive amount (e.g. 100 or 10 + 20)');
       return;
     }
     if (!categoryIdForType) {
@@ -179,8 +186,12 @@ export default function TransactionForm({ transaction, initialType, initialDate 
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={headerHeight}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive">
         <Text style={[styles.label, { color: theme.colors.text }]}>Type</Text>
         <View style={styles.typeGrid}>
           {TYPES.map((t) => {
@@ -220,12 +231,19 @@ export default function TransactionForm({ transaction, initialType, initialDate 
           <TextInput
             value={amount}
             onChangeText={setAmount}
-            keyboardType="decimal-pad"
-            placeholder="0.00"
+            keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="e.g. 10 + 20"
             placeholderTextColor={theme.muted}
             style={[styles.input, { color: theme.colors.text }]}
           />
         </View>
+        {showAmountPreview ? (
+          <Text style={{ color: theme.muted, fontSize: 13, marginTop: -2, marginBottom: 4 }}>
+            = {formatCurrency(evaluatedAmount!)}
+          </Text>
+        ) : null}
 
         <Text style={[styles.label, { color: theme.colors.text }]}>Category</Text>
         {isLoadingCats ? (
@@ -367,7 +385,7 @@ export default function TransactionForm({ transaction, initialType, initialDate 
 const styles = StyleSheet.create({
   container: {
     padding: 16,
-    paddingBottom: 40,
+    paddingBottom: 120,
     gap: 8,
   },
   label: {

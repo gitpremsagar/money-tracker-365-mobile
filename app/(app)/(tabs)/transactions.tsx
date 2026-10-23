@@ -458,7 +458,7 @@ export default function TransactionsScreen() {
       ) : null}
 
       {!isLoading && visibleTransactions.length > 0 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.totalsScroll}>
+        <View style={styles.totalsWrap}>
           {(Object.keys(totals) as CategoryType[]).map((type) =>
             totals[type] > 0 ? (
               <View
@@ -475,12 +475,12 @@ export default function TransactionsScreen() {
                     fontSize: 12,
                     fontWeight: '600',
                   }}>
-                  {TYPE_SHORT[type]} {formatCurrency(totals[type])}
+                  {TYPE_SHORT[type]} {formatCurrency(totals[type], 0)}
                 </Text>
               </View>
             ) : null,
           )}
-        </ScrollView>
+        </View>
       ) : null}
 
       {isLoading ? (
@@ -587,8 +587,14 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginRight: 8,
   },
-  totalsScroll: { paddingHorizontal: 16, marginTop: 10, maxHeight: 40 },
-  totalChip: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8 },
+  totalsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 16,
+    marginTop: 10,
+  },
+  totalChip: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
