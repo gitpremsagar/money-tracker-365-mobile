@@ -1,7 +1,16 @@
 import { CategoryBreakdownGrid } from '@/components/CategoryBreakdown';
-import CategoryDetailSheet from '@/components/CategoryDetailSheet';
+import { DebtsCard, MoneyFlowCard, NetBalanceBanner } from '@/components/MoneyFlow';
 import MonthPicker from '@/components/MonthPicker';
-import StatCard from '@/components/StatCard';
+import {
+  BreakdownSection,
+  InsightsCard,
+  MonthlyBreakdownTable,
+  PeriodComparisonCard,
+  TrendChart,
+  daysInMonth,
+  fillDailyBuckets,
+  fillMonthlyBuckets,
+} from '@/components/ReportWidgets';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import {
   getAnnualReport,
@@ -9,18 +18,16 @@ import {
   listDebts,
   type AnnualReport,
   type CategoryBreakdownItem,
-  type CategoryType,
   type Debt,
   type MonthlyReport,
   type ReportPeriod,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { currentMonth, currentYear, defaultDateForPeriod, formatCurrency } from '@/lib/format';
+import { currentMonth, currentYear, defaultDateForPeriod, monthLabel, navigateMonth } from '@/lib/format';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
-  Dimensions,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -28,15 +35,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { BarChart } from 'react-native-gifted-charts';
-
-const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const LEGEND = [
-  { label: 'Income', color: '#10b981' },
-  { label: 'Expense', color: '#f87171' },
-  { label: 'Saving', color: '#3b82f6' },
-  { label: 'Investment', color: '#a855f7' },
-];
 
 export default function ReportsScreen() {
   const { view } = useLocalSearchParams<{ view?: string }>();
@@ -85,94 +83,6 @@ function ReportModeToggle({
   );
 }
 
-function SummaryCards({
-  totalIncome,
-  totalExpense,
-  totalSaving,
-  totalInvestment,
-  netBalance,
-}: {
-  totalIncome: number;
-  totalExpense: number;
-  totalSaving: number;
-  totalInvestment: number;
-  netBalance: number;
-}) {
-  return (
-    <View style={styles.statsGrid}>
-      <StatCard label="Total Income" value={formatCurrency(totalIncome, 0)} color="green" />
-      <StatCard label="Total Expense" value={formatCurrency(totalExpense, 0)} color="red" />
-      <StatCard label="Total Savings" value={formatCurrency(totalSaving, 0)} color="blue" />
-      <StatCard label="Total Investments" value={formatCurrency(totalInvestment, 0)} color="purple" />
-      <StatCard
-        label="Net Balance"
-        value={`${netBalance >= 0 ? '+' : '-'}${formatCurrency(netBalance, 0)}`}
-        sub={netBalance >= 0 ? 'Surplus' : 'Deficit'}
-        color={netBalance >= 0 ? 'blue' : 'red'}
-      />
-    </View>
-  );
-}
-
-function TrendChart({
-  title,
-  emptyMessage,
-  data,
-}: {
-  title: string;
-  emptyMessage: string;
-  data: { value: number; label?: string; frontColor: string; spacing: number }[];
-}) {
-  const theme = useThemeColors();
-  const chartWidth = Dimensions.get('window').width - 64;
-  const hasActivity = data.some((item) => item.value > 0);
-
-  if (!hasActivity) {
-    return (
-      <View style={[styles.emptyChart, { borderColor: theme.border }]}>
-        <Text style={{ color: theme.muted, fontSize: 14 }}>{emptyMessage}</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={[styles.chartCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
-      <Text style={[styles.chartTitle, { color: theme.colors.text }]}>{title}</Text>
-      <View style={styles.legend}>
-        {LEGEND.map((item) => (
-          <View key={item.label} style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: item.color }]} />
-            <Text style={{ color: theme.muted, fontSize: 11 }}>{item.label}</Text>
-          </View>
-        ))}
-      </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <BarChart
-          data={data}
-          width={Math.max(chartWidth, data.length * 12)}
-          height={200}
-          barWidth={8}
-          noOfSections={4}
-          yAxisTextStyle={{ color: theme.muted, fontSize: 10 }}
-          xAxisLabelTextStyle={{ color: theme.muted, fontSize: 9 }}
-          isAnimated
-        />
-      </ScrollView>
-    </View>
-  );
-}
-
-function groupedBars(
-  rows: { label: string; income: number; expense: number; saving: number; investment: number }[],
-) {
-  return rows.flatMap((row) => [
-    { value: row.income, label: row.label, frontColor: '#10b981', spacing: 2 },
-    { value: row.expense, frontColor: '#f87171', spacing: 2 },
-    { value: row.saving, frontColor: '#3b82f6', spacing: 2 },
-    { value: row.investment, frontColor: '#a855f7', spacing: 8 },
-  ]);
-}
-
 function ReportBody({
   isLoading,
   isRefreshing,
@@ -199,76 +109,33 @@ function ReportBody({
   );
 }
 
-function ActiveDebts({
-  debts,
-  cardStyle,
-}: {
-  debts: Debt[];
-  cardStyle: { backgroundColor: string; borderColor: string };
-}) {
-  const theme = useThemeColors();
-  const taken = debts.filter((debt) => debt.type === 'TAKEN');
-  const given = debts.filter((debt) => debt.type === 'GIVEN');
-
-  return (
-    <View style={[styles.chartCard, cardStyle]}>
-      <Text style={[styles.chartTitle, { color: theme.colors.text }]}>Active Debts</Text>
-      <View style={styles.statsGrid}>
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600' }}>DEBT TAKEN</Text>
-          <Text style={{ color: '#dc2626', fontSize: 20, fontWeight: '700', marginTop: 4 }}>
-            {formatCurrency(taken.reduce((sum, debt) => sum + debt.amount, 0), 0)}
-          </Text>
-          <Text style={{ color: theme.muted, fontSize: 12, marginTop: 4 }}>
-            {taken.length} debt{taken.length === 1 ? '' : 's'}
-          </Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600' }}>DEBT GIVEN</Text>
-          <Text style={{ color: '#059669', fontSize: 20, fontWeight: '700', marginTop: 4 }}>
-            {formatCurrency(given.reduce((sum, debt) => sum + debt.amount, 0), 0)}
-          </Text>
-          <Text style={{ color: theme.muted, fontSize: 12, marginTop: 4 }}>
-            {given.length} debt{given.length === 1 ? '' : 's'}
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function CategoryActions({
+function CategoryGridAdapter({
   items,
   period,
-  cardStyle,
+  onSelect,
 }: {
   items: CategoryBreakdownItem[];
   period: ReportPeriod;
-  cardStyle: { backgroundColor: string; borderColor: string };
+  onSelect: (item: CategoryBreakdownItem) => void;
 }) {
+  const theme = useThemeColors();
   const router = useRouter();
-  const [selected, setSelected] = useState<CategoryBreakdownItem | null>(null);
-
-  function addTransaction(type: CategoryType) {
-    router.push({
-      pathname: '/(app)/transactions/new',
-      params: {
-        type,
-        date: defaultDateForPeriod(period).toISOString(),
-      },
-    });
-  }
 
   return (
-    <>
-      <CategoryBreakdownGrid
-        items={items}
-        cardStyle={cardStyle}
-        onSelect={setSelected}
-        onAdd={addTransaction}
-      />
-      <CategoryDetailSheet item={selected} period={period} onClose={() => setSelected(null)} />
-    </>
+    <CategoryBreakdownGrid
+      items={items}
+      cardStyle={{ backgroundColor: theme.card, borderColor: theme.border }}
+      onSelect={onSelect}
+      onAdd={(type) => {
+        router.push({
+          pathname: '/(app)/transactions/new',
+          params: {
+            type,
+            date: defaultDateForPeriod(period).toISOString(),
+          },
+        });
+      }}
+    />
   );
 }
 
@@ -277,6 +144,7 @@ function MonthlyReportView() {
   const theme = useThemeColors();
   const [month, setMonth] = useState(currentMonth());
   const [report, setReport] = useState<MonthlyReport | null>(null);
+  const [previousReport, setPreviousReport] = useState<MonthlyReport | null>(null);
   const [activeDebts, setActiveDebts] = useState<Debt[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -285,11 +153,13 @@ function MonthlyReportView() {
   const fetchReport = useCallback(async () => {
     if (!accessToken) return;
     try {
-      const [data, debtResult] = await Promise.all([
+      const [data, previousData, debtResult] = await Promise.all([
         getMonthlyReport(month, accessToken),
+        getMonthlyReport(navigateMonth(month, -1), accessToken).catch(() => null),
         listDebts({ status: 'ACTIVE', limit: 100 }, accessToken),
       ]);
       setReport(data);
+      setPreviousReport(previousData);
       setActiveDebts(debtResult.debts);
       setError(null);
     } catch (err) {
@@ -307,15 +177,14 @@ function MonthlyReportView() {
     }, [fetchReport]),
   );
 
-  const barData = groupedBars(
-    report?.dailyTotals.map((day) => ({
-      label: day.date.slice(8),
-      income: day.income,
-      expense: day.expense,
-      saving: day.saving,
-      investment: day.investment,
-    })) ?? [],
-  );
+  const buckets = report ? fillDailyBuckets(month, report.dailyTotals) : [];
+  const hasActivity = (report?.dailyTotals.length ?? 0) > 0;
+  const isCurrent = month === currentMonth();
+  const elapsedDays = isCurrent ? new Date().getDate() : daysInMonth(month);
+  const previousMonth = navigateMonth(month, -1);
+  const previousHasData = previousReport != null && previousReport.dailyTotals.length > 0;
+  const debtsTaken = activeDebts.filter((d) => d.type === 'TAKEN');
+  const debtsGiven = activeDebts.filter((d) => d.type === 'GIVEN');
 
   return (
     <ReportBody
@@ -330,20 +199,54 @@ function MonthlyReportView() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {report && !isLoading ? (
         <>
-          <SummaryCards
-            totalIncome={report.totalIncome}
-            totalExpense={report.totalExpense}
-            totalSaving={report.totalSaving}
-            totalInvestment={report.totalInvestment}
+          <NetBalanceBanner
             netBalance={report.netBalance}
+            label={monthLabel(month)}
+            comparison={{
+              previous: previousHasData ? previousReport!.netBalance : null,
+              label: monthLabel(previousMonth),
+            }}
           />
-          <TrendChart title="Daily Trend" emptyMessage="No transaction data for this month." data={barData} />
-          <CategoryActions
-            items={report.categoryBreakdown}
+          <MoneyFlowCard
+            income={report.totalIncome}
+            expense={report.totalExpense}
+            saving={report.totalSaving}
+            investment={report.totalInvestment}
+            debtRepayment={report.totalDebtRepayment}
+          />
+          {hasActivity ? (
+            <>
+              <PeriodComparisonCard
+                current={report}
+                previous={previousHasData ? previousReport : null}
+                previousLabel={monthLabel(previousMonth)}
+              />
+              <InsightsCard
+                mode="month"
+                totals={report}
+                categoryBreakdown={report.categoryBreakdown}
+                buckets={buckets}
+                elapsed={elapsedDays}
+                projectDays={isCurrent ? daysInMonth(month) : undefined}
+              />
+              <TrendChart mode="month" buckets={buckets} />
+            </>
+          ) : (
+            <View style={[styles.empty, { borderColor: theme.border }]}>
+              <Text style={{ color: theme.muted, fontSize: 14 }}>No transaction data for this month.</Text>
+            </View>
+          )}
+          <BreakdownSection
+            categories={report.categoryBreakdown}
+            groups={report.groupBreakdown ?? []}
             period={{ kind: 'month', month }}
-            cardStyle={{ backgroundColor: theme.card, borderColor: theme.border }}
+            CategoryGrid={CategoryGridAdapter}
           />
-          <ActiveDebts debts={activeDebts} cardStyle={{ backgroundColor: theme.card, borderColor: theme.border }} />
+          <DebtsCard
+            taken={debtsTaken.reduce((sum, d) => sum + d.outstanding, 0)}
+            given={debtsGiven.reduce((sum, d) => sum + d.outstanding, 0)}
+            subtitle={`${debtsTaken.length} taken · ${debtsGiven.length} given (active)`}
+          />
         </>
       ) : null}
     </ReportBody>
@@ -355,6 +258,7 @@ function AnnualReportView() {
   const theme = useThemeColors();
   const [year, setYear] = useState(currentYear());
   const [report, setReport] = useState<AnnualReport | null>(null);
+  const [previousReport, setPreviousReport] = useState<AnnualReport | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -363,8 +267,12 @@ function AnnualReportView() {
   const fetchReport = useCallback(async () => {
     if (!accessToken) return;
     try {
-      const data = await getAnnualReport(year, accessToken);
+      const [data, previousData] = await Promise.all([
+        getAnnualReport(year, accessToken),
+        getAnnualReport(year - 1, accessToken).catch(() => null),
+      ]);
       setReport(data);
+      setPreviousReport(previousData);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load report');
@@ -381,15 +289,13 @@ function AnnualReportView() {
     }, [fetchReport]),
   );
 
-  const barData = groupedBars(
-    report?.monthlyTotals.map((item) => ({
-      label: MONTH_LABELS[parseInt(item.month.slice(5), 10) - 1] ?? item.month,
-      income: item.income,
-      expense: item.expense,
-      saving: item.saving,
-      investment: item.investment,
-    })) ?? [],
-  );
+  const hasActivityIn = (r: AnnualReport | null) =>
+    r?.monthlyTotals.some((m) => m.income + m.expense + m.saving + m.investment + m.debtRepayment > 0) ?? false;
+
+  const hasActivity = hasActivityIn(report);
+  const previousHasData = hasActivityIn(previousReport);
+  const buckets = report ? fillMonthlyBuckets(year, report.monthlyTotals) : [];
+  const elapsedMonths = year === currentYear() ? new Date().getMonth() + 1 : 12;
 
   return (
     <ReportBody
@@ -415,18 +321,49 @@ function AnnualReportView() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {report && !isLoading ? (
         <>
-          <SummaryCards
-            totalIncome={report.totalIncome}
-            totalExpense={report.totalExpense}
-            totalSaving={report.totalSaving}
-            totalInvestment={report.totalInvestment}
+          <NetBalanceBanner
             netBalance={report.netBalance}
+            label={String(year)}
+            comparison={{
+              previous: previousHasData && previousReport ? previousReport.netBalance : null,
+              label: String(year - 1),
+            }}
           />
-          <TrendChart title="Monthly Trend" emptyMessage="No transaction data for this year." data={barData} />
-          <CategoryActions
-            items={report.categoryBreakdown}
+          <MoneyFlowCard
+            income={report.totalIncome}
+            expense={report.totalExpense}
+            saving={report.totalSaving}
+            investment={report.totalInvestment}
+            debtRepayment={report.totalDebtRepayment}
+            subtitle="How this year's income was used"
+          />
+          {hasActivity ? (
+            <>
+              <PeriodComparisonCard
+                current={report}
+                previous={previousHasData ? previousReport : null}
+                previousLabel={String(year - 1)}
+              />
+              <InsightsCard
+                mode="year"
+                totals={report}
+                categoryBreakdown={report.categoryBreakdown}
+                buckets={buckets}
+                elapsed={elapsedMonths}
+              />
+              <TrendChart mode="year" buckets={buckets} />
+              <MonthlyBreakdownTable buckets={buckets} />
+            </>
+          ) : (
+            <View style={[styles.empty, { borderColor: theme.border }]}>
+              <Text style={{ color: theme.muted, fontSize: 14 }}>No transaction data for this year.</Text>
+            </View>
+          )}
+          <BreakdownSection
+            categories={report.categoryBreakdown}
+            groups={report.groupBreakdown ?? []}
             period={{ kind: 'year', year }}
-            cardStyle={{ backgroundColor: theme.card, borderColor: theme.border }}
+            CategoryGrid={CategoryGridAdapter}
           />
         </>
       ) : null}
@@ -440,14 +377,8 @@ const styles = StyleSheet.create({
   toggleItem: { borderRadius: 9, paddingHorizontal: 14, paddingVertical: 8 },
   container: { padding: 16, paddingBottom: 32, gap: 16 },
   subtitle: { fontSize: 14, marginBottom: -8 },
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  chartCard: { borderRadius: 16, borderWidth: 1, padding: 16 },
-  chartTitle: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
-  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 12 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  emptyChart: { borderWidth: 2, borderStyle: 'dashed', borderRadius: 16, padding: 32, alignItems: 'center' },
-  error: { color: '#dc2626', fontSize: 14, marginTop: 16 },
+  error: { color: '#dc2626', fontSize: 14 },
+  empty: { borderWidth: 2, borderStyle: 'dashed', borderRadius: 16, padding: 32, alignItems: 'center' },
   yearPicker: {
     flexDirection: 'row',
     alignItems: 'center',

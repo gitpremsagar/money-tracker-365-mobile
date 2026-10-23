@@ -1,5 +1,5 @@
 import EmptyState from '@/components/EmptyState';
-import StatCard from '@/components/StatCard';
+import { DebtsCard, MoneyFlowCard, NetBalanceBanner, TopExpensesCard } from '@/components/MoneyFlow';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { getMonthlyReport, listDebts, listTransactions, type Debt, type MonthlyReport, type Transaction } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -7,7 +7,6 @@ import {
   TYPE_COLORS,
   currentMonth,
   formatAmount,
-  formatCurrency,
   formatDate,
   monthLabel,
   typeIcon,
@@ -36,8 +35,18 @@ export default function DashboardScreen() {
 
   const month = currentMonth();
   const monthLabelText = monthLabel(month);
-  const debtTaken = activeDebts.filter((debt) => debt.type === 'TAKEN').reduce((sum, debt) => sum + debt.amount, 0);
-  const debtGiven = activeDebts.filter((debt) => debt.type === 'GIVEN').reduce((sum, debt) => sum + debt.amount, 0);
+  const debtTaken = activeDebts
+    .filter((debt) => debt.type === 'TAKEN')
+    .reduce((sum, debt) => sum + debt.outstanding, 0);
+  const debtGiven = activeDebts
+    .filter((debt) => debt.type === 'GIVEN')
+    .reduce((sum, debt) => sum + debt.outstanding, 0);
+
+  const topExpenses =
+    report?.categoryBreakdown
+      .filter((c) => c.type === 'EXPENSE')
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5) ?? [];
 
   const loadDashboard = useCallback(async () => {
     if (!accessToken) return;
@@ -98,18 +107,17 @@ export default function DashboardScreen() {
       {isLoading ? (
         <ActivityIndicator color={theme.primary} style={{ marginVertical: 32 }} />
       ) : report ? (
-        <View style={styles.statsGrid}>
-          <StatCard label="Total Income" value={formatCurrency(report.totalIncome)} color="green" />
-          <StatCard label="Total Expense" value={formatCurrency(report.totalExpense)} color="red" />
-          <StatCard label="Total Savings" value={formatCurrency(report.totalSaving)} color="blue" />
-          <StatCard label="Total Investments" value={formatCurrency(report.totalInvestment)} color="purple" />
-          <StatCard
-            label="Net Balance"
-            value={`${report.netBalance >= 0 ? '+' : ''}${formatCurrency(report.netBalance)}`}
-            color={report.netBalance >= 0 ? 'blue' : 'red'}
+        <View style={styles.summaryStack}>
+          <NetBalanceBanner netBalance={report.netBalance} label={monthLabelText} />
+          <MoneyFlowCard
+            income={report.totalIncome}
+            expense={report.totalExpense}
+            saving={report.totalSaving}
+            investment={report.totalInvestment}
+            debtRepayment={report.totalDebtRepayment}
           />
-          <StatCard label="Debt Taken" value={formatCurrency(debtTaken)} color="red" />
-          <StatCard label="Debt Given" value={formatCurrency(debtGiven)} color="green" />
+          <TopExpensesCard items={topExpenses} totalExpense={report.totalExpense} />
+          <DebtsCard taken={debtTaken} given={debtGiven} />
         </View>
       ) : null}
 
@@ -190,7 +198,7 @@ const styles = StyleSheet.create({
   logoutButton: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, alignSelf: 'flex-start' },
   addButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   addText: { color: '#fff', fontWeight: '600', fontSize: 14 },
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 },
+  summaryStack: { gap: 12, marginBottom: 24 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sectionTitle: { fontSize: 16, fontWeight: '600' },
   txRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 14, borderWidth: 1, marginBottom: 8 },

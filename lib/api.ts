@@ -191,13 +191,14 @@ export type Category = {
   id: string;
   name: string;
   type: CategoryType;
+  groupId: string | null;
   userId: string;
   createdAt: string;
   updatedAt: string;
 };
 
 export async function createCategory(
-  input: { name: string; type: CategoryType },
+  input: { name: string; type: CategoryType; groupId?: string | null },
   accessToken: string,
 ): Promise<Category> {
   const res = await apiFetch<{ category: Category }>('/categories', {
@@ -222,7 +223,7 @@ export async function listCategories(
 
 export async function updateCategory(
   id: string,
-  input: { name: string },
+  input: { name?: string; groupId?: string | null },
   accessToken: string,
 ): Promise<Category> {
   const res = await apiFetch<{ category: Category }>(`/categories/${id}`, {
@@ -235,6 +236,60 @@ export async function updateCategory(
 
 export async function deleteCategory(id: string, accessToken: string): Promise<void> {
   await apiFetch<{ message: string }>(`/categories/${id}`, {
+    method: 'DELETE',
+    accessToken,
+  });
+}
+
+export type CategoryGroup = {
+  id: string;
+  name: string;
+  type: CategoryType;
+  userId: string;
+  categories?: { id: string; name: string }[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function listCategoryGroups(
+  accessToken: string,
+  type?: CategoryType,
+): Promise<CategoryGroup[]> {
+  const params = type ? `?type=${type}` : '';
+  const res = await apiFetch<{ groups: CategoryGroup[] }>(`/category-groups${params}`, {
+    method: 'GET',
+    accessToken,
+  });
+  return res.groups;
+}
+
+export async function createCategoryGroup(
+  input: { name: string; type: CategoryType },
+  accessToken: string,
+): Promise<CategoryGroup> {
+  const res = await apiFetch<{ group: CategoryGroup }>('/category-groups', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+  return res.group;
+}
+
+export async function updateCategoryGroup(
+  id: string,
+  input: { name: string },
+  accessToken: string,
+): Promise<CategoryGroup> {
+  const res = await apiFetch<{ group: CategoryGroup }>(`/category-groups/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+  return res.group;
+}
+
+export async function deleteCategoryGroup(id: string, accessToken: string): Promise<void> {
+  await apiFetch<{ message: string }>(`/category-groups/${id}`, {
     method: 'DELETE',
     accessToken,
   });
@@ -268,6 +323,8 @@ export type ListTransactionsResult = {
 export type ListTransactionsParams = {
   month?: string;
   year?: number;
+  from?: string;
+  to?: string;
   type?: CategoryType;
   categoryId?: string;
   page?: number;
@@ -293,6 +350,8 @@ export async function listTransactions(
   const qs = new URLSearchParams();
   if (params.month) qs.set('month', params.month);
   if (params.year) qs.set('year', String(params.year));
+  if (params.from) qs.set('from', params.from);
+  if (params.to) qs.set('to', params.to);
   if (params.type) qs.set('type', params.type);
   if (params.categoryId) qs.set('categoryId', params.categoryId);
   if (params.page) qs.set('page', String(params.page));
@@ -335,6 +394,17 @@ export async function deleteTransaction(id: string, accessToken: string): Promis
 export type DebtType = 'TAKEN' | 'GIVEN';
 export type DebtStatus = 'ACTIVE' | 'SETTLED';
 
+export type DebtPayment = {
+  id: string;
+  amount: number;
+  date: string;
+  note: string | null;
+  debtId: string;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type Debt = {
   id: string;
   type: DebtType;
@@ -346,6 +416,9 @@ export type Debt = {
   userId: string;
   createdAt: string;
   updatedAt: string;
+  paidAmount: number;
+  outstanding: number;
+  payments?: DebtPayment[];
 };
 
 export type DebtPagination = {
@@ -430,12 +503,62 @@ export async function deleteDebt(id: string, accessToken: string): Promise<void>
   });
 }
 
+export async function addDebtPayment(
+  debtId: string,
+  input: { amount: number; date?: string; note?: string },
+  accessToken: string,
+): Promise<Debt> {
+  const res = await apiFetch<{ debt: Debt }>(`/debts/${debtId}/payments`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+  return res.debt;
+}
+
+export async function updateDebtPayment(
+  debtId: string,
+  paymentId: string,
+  input: { amount?: number; date?: string; note?: string | null },
+  accessToken: string,
+): Promise<Debt> {
+  const res = await apiFetch<{ debt: Debt }>(`/debts/${debtId}/payments/${paymentId}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+  return res.debt;
+}
+
+export async function deleteDebtPayment(
+  debtId: string,
+  paymentId: string,
+  accessToken: string,
+): Promise<Debt> {
+  const res = await apiFetch<{ debt: Debt }>(`/debts/${debtId}/payments/${paymentId}`, {
+    method: 'DELETE',
+    accessToken,
+  });
+  return res.debt;
+}
+
 export type CategoryBreakdownItem = {
   id: string;
   name: string;
   type: CategoryType;
+  groupId: string | null;
+  groupName: string | null;
   total: number;
   percentage: number;
+};
+
+export type GroupBreakdownItem = {
+  id: string | null;
+  name: string;
+  type: CategoryType;
+  total: number;
+  percentage: number;
+  categories: { id: string; name: string; total: number; percentage: number }[];
 };
 
 export type DailyTotalItem = {
@@ -444,6 +567,7 @@ export type DailyTotalItem = {
   expense: number;
   saving: number;
   investment: number;
+  debtRepayment: number;
 };
 
 export type MonthlyReport = {
@@ -452,8 +576,10 @@ export type MonthlyReport = {
   totalExpense: number;
   totalSaving: number;
   totalInvestment: number;
+  totalDebtRepayment: number;
   netBalance: number;
   categoryBreakdown: CategoryBreakdownItem[];
+  groupBreakdown: GroupBreakdownItem[];
   dailyTotals: DailyTotalItem[];
 };
 
@@ -471,6 +597,7 @@ export type MonthlyTotalItem = {
   expense: number;
   saving: number;
   investment: number;
+  debtRepayment: number;
 };
 
 export type AnnualReport = {
@@ -479,8 +606,10 @@ export type AnnualReport = {
   totalExpense: number;
   totalSaving: number;
   totalInvestment: number;
+  totalDebtRepayment: number;
   netBalance: number;
   categoryBreakdown: CategoryBreakdownItem[];
+  groupBreakdown: GroupBreakdownItem[];
   monthlyTotals: MonthlyTotalItem[];
 };
 

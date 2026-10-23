@@ -123,9 +123,16 @@ export default function DebtsScreen() {
               {DEBT_TYPE_LABEL[debt.type]} · {formatDateOnly(debt.date)} · {DEBT_STATUS_LABEL[debt.status]}
             </Text>
           </View>
-          <Text style={{ color: theme.isDark ? colors.darkText : colors.text, fontWeight: '600' }}>
-            {formatCurrency(debt.amount)}
-          </Text>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={{ color: theme.isDark ? colors.darkText : colors.text, fontWeight: '600' }}>
+              {formatCurrency(debt.outstanding)}
+            </Text>
+            {debt.paidAmount > 0 ? (
+              <Text style={{ color: theme.muted, fontSize: 11 }}>
+                of {formatCurrency(debt.amount)}
+              </Text>
+            ) : null}
+          </View>
         </Pressable>
         <View style={styles.actions}>
           <Pressable onPress={() => router.push(`/(app)/debts/${debt.id}/edit` as Href)}>
