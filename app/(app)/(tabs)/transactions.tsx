@@ -20,8 +20,8 @@ import {
 } from '@/lib/format';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -209,6 +209,24 @@ export default function TransactionsScreen() {
       await fetchTransactions();
     })();
   }, [fetchTransactions]);
+
+  // Refetch when the tab regains focus, so rows created elsewhere (for example by
+  // the assistant, or the "Add transaction" screen) show up without a manual pull.
+  const fetchTransactionsRef = useRef(fetchTransactions);
+  useEffect(() => {
+    fetchTransactionsRef.current = fetchTransactions;
+  }, [fetchTransactions]);
+
+  const isFirstFocusRef = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstFocusRef.current) {
+        isFirstFocusRef.current = false;
+        return;
+      }
+      void fetchTransactionsRef.current();
+    }, []),
+  );
 
   async function handleDelete(id: string) {
     if (!accessToken) return;

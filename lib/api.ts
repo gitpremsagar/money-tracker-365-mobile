@@ -1,6 +1,33 @@
 import * as tokenStore from './token-store';
 
-const API_URL ="https://api.moneytracker365.com"
+const DEFAULT_API_URL = 'https://api.moneytracker365.com';
+
+/**
+ * The base URL comes from EXPO_PUBLIC_API_URL (see .env) so the app can point at
+ * a local API during development, and falls back to production when it is unset.
+ */
+function resolveApiUrl(): string {
+  const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
+  const url = configured && configured.length > 0 ? configured : DEFAULT_API_URL;
+  return url.replace(/\/+$/, '');
+}
+
+const API_URL = resolveApiUrl();
+
+/** Error thrown for non-2xx responses, carrying the HTTP status code. */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
 export type AuthUser = {
   id: string;
   name: string;
@@ -110,8 +137,8 @@ export async function apiFetch<T>(path: string, init: ApiRequestInit = {}): Prom
     const message =
       data && typeof data === 'object' && 'message' in data
         ? String(data.message)
-        : 'Request failed';
-    throw new Error(message);
+        : `Request failed (${response.status})`;
+    throw new ApiError(message, response.status);
   }
 
   return data as T;
@@ -622,3 +649,304 @@ export async function getAnnualReport(year: number, accessToken: string): Promis
 }
 
 export type ReportPeriod = { kind: 'month'; month: string } | { kind: 'year'; year: number };
+
+// ─── Assistant ────────────────────────────────────────────────────────────────
+
+export type AssistantIntent =
+  | 'ADD_TRANSACTIONS'
+  | 'CLARIFY'
+  | 'UNSUPPORTED'
+  | 'QUERY'
+  | 'EDIT_TRANSACTIONS'
+  | 'DELETE_TRANSACTIONS'
+  | 'DEBT_PAYMENT';
+
+export type AssistantProposal = {
+  amount: number;
+  type: CategoryType;
+  categoryId: string | null;
+  categoryName: string | null;
+  suggestedCategoryName: string | null;
+  date: string;
+  note: string | null;
+  confidence: number;
+};
+
+export type AssistantTransactionSnapshot = {
+  id: string;
+  amount: number;
+  type: CategoryType;
+  categoryId: string;
+  categoryName: string;
+  date: string;
+  note: string | null;
+};
+
+export type AssistantOperation = {
+  action: 'UPDATE' | 'DELETE';
+  transactionId: string;
+  before: AssistantTransactionSnapshot;
+  after: AssistantTransactionSnapshot | null;
+  confidence: number;
+};
+
+export type AssistantDebtPayment = {
+  debtId: string;
+  partyName: string;
+  debtType: DebtType;
+  amount: number;
+  date: string;
+  note: string | null;
+  outstandingBefore: number;
+  outstandingAfter: number;
+  confidence: number;
+};
+
+export type AssistantQueryTransaction = {
+  id: string;
+  amount: number;
+  type: CategoryType;
+  date: string;
+  note: string | null;
+  categoryName: string;
+};
+
+export type AssistantQueryResult = {
+  metric: 'TOTAL' | 'COUNT' | 'LIST';
+  from: string;
+  to: string;
+  periodLabel: string;
+  count: number;
+  totals: Record<CategoryType, number>;
+  net: number;
+  byCategory: {
+    id: string;
+    name: string;
+    type: CategoryType;
+    total: number;
+    count: number;
+  }[];
+  transactions: AssistantQueryTransaction[];
+  answer: string;
+};
+
+export type AssistantParseResult = {
+  conversationId: string | null;
+  messageId: string | null;
+  intent: AssistantIntent;
+  reply: string;
+  proposals: AssistantProposal[];
+  operations: AssistantOperation[];
+  debtPayments: AssistantDebtPayment[];
+  queryResult: AssistantQueryResult | null;
+  clarifications: string[];
+  categoriesEmpty: boolean;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    model?: string;
+  };
+};
+
+export type AssistantHistoryMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export type AssistantConfirmProposal = {
+  amount: number;
+  categoryId?: string | null;
+  newCategory?: { name: string; type: CategoryType } | null;
+  note?: string | null;
+  date?: string;
+};
+
+export type AssistantApplyOperation = {
+  action: 'UPDATE' | 'DELETE';
+  transactionId: string;
+  amount?: number;
+  categoryId?: string | null;
+  newCategory?: { name: string; type: CategoryType } | null;
+  date?: string;
+  note?: string | null;
+};
+
+export type AssistantApplyResult = {
+  transactions: Transaction[];
+  deletedTransactionIds: string[];
+  debts: Debt[];
+};
+
+export type AssistantPreferences = {
+  autoSave: boolean;
+};
+
+export type AssistantConversationSummary = {
+  id: string;
+  title: string;
+  lastMessageAt: string;
+  preview: string | null;
+};
+
+export type AssistantMessagePayload = {
+  intent?: AssistantIntent;
+  proposals?: AssistantProposal[];
+  operations?: AssistantOperation[];
+  debtPayments?: AssistantDebtPayment[];
+  queryResult?: AssistantQueryResult | null;
+  clarifications?: string[];
+  categoriesEmpty?: boolean;
+  saved?: boolean;
+  transactionIds?: string[];
+  applied?: boolean;
+  updatedTransactionIds?: string[];
+  deletedTransactionIds?: string[];
+  debtIds?: string[];
+};
+
+export type AssistantStoredMessage = {
+  id: string;
+  role: 'USER' | 'ASSISTANT';
+  content: string;
+  payload: AssistantMessagePayload | null;
+  createdAt: string;
+};
+
+export type AssistantConversationDetail = {
+  conversation: {
+    id: string;
+    title: string;
+    lastMessageAt: string;
+  };
+  messages: AssistantStoredMessage[];
+};
+
+export type AssistantUsageStats = {
+  month: {
+    messages: number;
+    totalTokens: number;
+    averageLatencyMs: number;
+  };
+  recent: {
+    id: string;
+    model: string;
+    intent: string | null;
+    proposalCount: number;
+    totalTokens: number | null;
+    latencyMs: number;
+    createdAt: string;
+  }[];
+};
+
+export async function parseAssistantMessage(
+  input: {
+    message: string;
+    history?: AssistantHistoryMessage[];
+    timezone?: string;
+    now?: string;
+    conversationId?: string;
+  },
+  accessToken: string,
+): Promise<AssistantParseResult> {
+  return apiFetch<AssistantParseResult>('/assistant/parse', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+}
+
+export async function confirmAssistantProposals(
+  input: {
+    proposals: AssistantConfirmProposal[];
+    requestId?: string;
+    conversationId?: string;
+  },
+  accessToken: string,
+): Promise<Transaction[]> {
+  const res = await apiFetch<{ transactions: Transaction[] }>('/assistant/confirm', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+  return res.transactions;
+}
+
+export async function applyAssistantActions(
+  input: {
+    operations?: AssistantApplyOperation[];
+    debtPayments?: { debtId: string; amount: number; date?: string; note?: string | null }[];
+    requestId?: string;
+    conversationId?: string;
+  },
+  accessToken: string,
+): Promise<AssistantApplyResult> {
+  return apiFetch<AssistantApplyResult>('/assistant/apply', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+}
+
+export async function undoAssistantTransactions(
+  input: { transactionIds: string[]; requestId?: string },
+  accessToken: string,
+): Promise<{ deleted: number }> {
+  return apiFetch<{ deleted: number }>('/assistant/undo', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+}
+
+export async function getAssistantPreferences(
+  accessToken: string,
+): Promise<AssistantPreferences> {
+  return apiFetch<AssistantPreferences>('/assistant/preferences', { accessToken });
+}
+
+export async function updateAssistantPreferences(
+  input: AssistantPreferences,
+  accessToken: string,
+): Promise<AssistantPreferences> {
+  return apiFetch<AssistantPreferences>('/assistant/preferences', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+}
+
+export async function listAssistantConversations(
+  accessToken: string,
+  limit = 20,
+): Promise<AssistantConversationSummary[]> {
+  const res = await apiFetch<{ conversations: AssistantConversationSummary[] }>(
+    `/assistant/conversations?limit=${limit}`,
+    { accessToken },
+  );
+  return res.conversations;
+}
+
+export async function getAssistantConversation(
+  conversationId: string,
+  accessToken: string,
+): Promise<AssistantConversationDetail> {
+  return apiFetch<AssistantConversationDetail>(
+    `/assistant/conversations/${encodeURIComponent(conversationId)}`,
+    { accessToken },
+  );
+}
+
+export async function deleteAssistantConversation(
+  conversationId: string,
+  accessToken: string,
+): Promise<void> {
+  await apiFetch<null>(`/assistant/conversations/${encodeURIComponent(conversationId)}`, {
+    method: 'DELETE',
+    accessToken,
+  });
+}
+
+export async function getAssistantUsage(accessToken: string): Promise<AssistantUsageStats> {
+  return apiFetch<AssistantUsageStats>('/assistant/usage', { accessToken });
+}

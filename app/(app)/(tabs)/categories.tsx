@@ -18,7 +18,8 @@ import {
 import { useAuth } from '@/lib/auth-context';
 import { TYPE_COLORS, TYPE_LABEL } from '@/lib/format';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -86,6 +87,23 @@ export default function CategoriesScreen() {
       await fetchData();
     })();
   }, [fetchData]);
+
+  // The assistant can create categories, so refresh when this tab regains focus.
+  const fetchDataRef = useRef(fetchData);
+  useEffect(() => {
+    fetchDataRef.current = fetchData;
+  }, [fetchData]);
+
+  const isFirstFocusRef = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstFocusRef.current) {
+        isFirstFocusRef.current = false;
+        return;
+      }
+      void fetchDataRef.current();
+    }, []),
+  );
 
   function changeType(type: CategoryType) {
     setActiveType(type);
