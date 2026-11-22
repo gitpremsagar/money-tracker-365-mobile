@@ -760,264 +760,298 @@ export async function getAnnualReport(year: number, accessToken: string): Promis
 }
 
 export type ReportPeriod = { kind: 'month'; month: string } | { kind: 'year'; year: number };
-
 // ─── Assistant ────────────────────────────────────────────────────────────────
 
 export type AssistantIntent =
-  | 'ADD_TRANSACTIONS'
-  | 'CLARIFY'
-  | 'UNSUPPORTED'
+  | 'CREATE'
+  | 'UPDATE'
+  | 'DELETE'
   | 'QUERY'
-  | 'EDIT_TRANSACTIONS'
-  | 'DELETE_TRANSACTIONS'
-  | 'DEBT_PAYMENT';
+  | 'IMPORT'
+  | 'CLARIFY'
+  | 'UNSUPPORTED';
 
 export type AssistantProposal = {
+  proposalId: string;
   amount: number;
   type: CategoryType;
   categoryId: string | null;
   categoryName: string | null;
   suggestedCategoryName: string | null;
   date: string;
-  note: string | null;
+  note: string;
   confidence: number;
+  source: 'TEXT' | 'IMAGE' | 'AUDIO';
 };
 
 export type AssistantTransactionSnapshot = {
   id: string;
   amount: number;
+  note: string | null;
   type: CategoryType;
+  date: string;
   categoryId: string;
   categoryName: string;
-  date: string;
-  note: string | null;
 };
 
 export type AssistantOperation = {
-  action: 'UPDATE' | 'DELETE';
-  transactionId: string;
+  operationId: string;
+  kind: 'UPDATE' | 'DELETE';
+  targetId: string;
   before: AssistantTransactionSnapshot;
   after: AssistantTransactionSnapshot | null;
+  changes: {
+    amount?: number;
+    categoryId?: string;
+    date?: string;
+    note?: string | null;
+  };
   confidence: number;
-};
-
-export type AssistantDebtPayment = {
-  debtId: string;
-  partyName: string;
-  debtType: DebtType;
-  amount: number;
-  date: string;
-  note: string | null;
-  outstandingBefore: number;
-  outstandingAfter: number;
-  confidence: number;
-};
-
-export type AssistantQueryTransaction = {
-  id: string;
-  amount: number;
-  type: CategoryType;
-  date: string;
-  note: string | null;
-  categoryName: string;
 };
 
 export type AssistantQueryResult = {
-  metric: 'TOTAL' | 'COUNT' | 'LIST';
-  from: string;
-  to: string;
-  periodLabel: string;
+  total: number;
   count: number;
-  totals: Record<CategoryType, number>;
-  net: number;
-  byCategory: {
+  average: number;
+  transactions: Array<{
     id: string;
-    name: string;
+    date: string;
+    amount: number;
     type: CategoryType;
-    total: number;
-    count: number;
-  }[];
-  transactions: AssistantQueryTransaction[];
-  answer: string;
+    categoryName: string;
+    note: string | null;
+  }>;
+  groups: Array<{ key: string; total: number; count: number }>;
 };
 
-export type AssistantParseResult = {
-  conversationId: string | null;
-  messageId: string | null;
+export type AssistantTurn = {
   intent: AssistantIntent;
   reply: string;
   proposals: AssistantProposal[];
   operations: AssistantOperation[];
-  debtPayments: AssistantDebtPayment[];
+  query: Record<string, unknown> | null;
   queryResult: AssistantQueryResult | null;
   clarifications: string[];
-  categoriesEmpty: boolean;
-  usage?: {
-    promptTokens?: number;
-    completionTokens?: number;
-    totalTokens?: number;
-    model?: string;
+  savedProposalIds?: string[];
+  savedOperationIds?: string[];
+  savedBatchId?: string;
+};
+
+export type AssistantStatus = {
+  enabled: boolean;
+  configured: boolean;
+  consentRequired: boolean;
+  model: string;
+  limits: {
+    maxTextChars: number;
+    maxCreatesPerTurn: number;
+    dailyMessages: number;
+    dailyImportPages: number;
+    maxImportRows: number;
+    maxImageMb: number;
+    maxAudioMb: number;
+    maxStatementMb: number;
   };
-};
-
-export type AssistantHistoryMessage = {
-  role: 'user' | 'assistant';
-  content: string;
-};
-
-export type AssistantConfirmProposal = {
-  amount: number;
-  categoryId?: string | null;
-  newCategory?: { name: string; type: CategoryType } | null;
-  note?: string | null;
-  date?: string;
-};
-
-export type AssistantApplyOperation = {
-  action: 'UPDATE' | 'DELETE';
-  transactionId: string;
-  amount?: number;
-  categoryId?: string | null;
-  newCategory?: { name: string; type: CategoryType } | null;
-  date?: string;
-  note?: string | null;
-};
-
-export type AssistantApplyResult = {
-  transactions: Transaction[];
-  deletedTransactionIds: string[];
-  debts: Debt[];
 };
 
 export type AssistantPreferences = {
-  autoSave: boolean;
+  autoSaveCreates: boolean;
+  thinkingMode: boolean;
+  reasoningEffort: 'low' | 'high' | 'max';
+  timezone: string;
+  consentAt: string | null;
 };
 
-export type AssistantConversationSummary = {
+export type AssistantThreadSummary = {
   id: string;
   title: string;
-  lastMessageAt: string;
+  messageCount: number;
+  importCount: number;
   preview: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
-export type AssistantMessagePayload = {
-  intent?: AssistantIntent;
-  proposals?: AssistantProposal[];
-  operations?: AssistantOperation[];
-  debtPayments?: AssistantDebtPayment[];
-  queryResult?: AssistantQueryResult | null;
-  clarifications?: string[];
-  categoriesEmpty?: boolean;
-  saved?: boolean;
-  transactionIds?: string[];
-  applied?: boolean;
-  updatedTransactionIds?: string[];
-  deletedTransactionIds?: string[];
-  debtIds?: string[];
-};
-
-export type AssistantStoredMessage = {
+export type AssistantMessageRecord = {
   id: string;
-  role: 'USER' | 'ASSISTANT';
-  content: string;
-  payload: AssistantMessagePayload | null;
+  threadId: string;
+  userId: string;
+  seq: number;
+  role: 'user' | 'assistant' | 'system';
+  kind: 'TEXT' | 'IMAGE' | 'AUDIO' | 'STATEMENT' | 'SYSTEM';
+  text: string | null;
+  transcript: string | null;
+  reasoning: string | null;
+  attachment: { kind?: string; mime?: string; bytes?: number; filename?: string } | null;
+  turn: AssistantTurn | null;
+  model: string | null;
   createdAt: string;
 };
 
-export type AssistantConversationDetail = {
-  conversation: {
-    id: string;
-    title: string;
-    lastMessageAt: string;
-  };
-  messages: AssistantStoredMessage[];
+export type AssistantTurnResponse = {
+  threadId: string;
+  messageId: string;
+  turn: AssistantTurn;
+  reasoning: string | null;
+  autoSaved: {
+    batchId: string;
+    created: number;
+    updated: number;
+    deleted: number;
+    transactions: AssistantTransactionSnapshot[];
+    undoUntil: string;
+  } | null;
+  autoSaveError: string | null;
 };
 
-export type AssistantUsageStats = {
-  month: {
+export type AssistantImportSummary = {
+  id: string;
+  filename: string;
+  source: 'PDF' | 'CSV' | 'XLSX';
+  status: 'PROCESSING' | 'READY' | 'FAILED' | 'COMMITTED';
+  pages: number | null;
+  rowCount: number;
+  duplicateCount: number;
+  error: string | null;
+  createdAt: string;
+  committedAt: string | null;
+};
+
+export type AssistantImportRow = {
+  id: string;
+  importId: string;
+  rowIndex: number;
+  date: string;
+  amount: number;
+  type: 'EXPENSE' | 'INCOME';
+  description: string | null;
+  categoryId: string | null;
+  suggestedCategoryName: string | null;
+  confidence: number;
+  status: 'PENDING' | 'DUPLICATE' | 'IMPORTED' | 'SKIPPED';
+  transactionId: string | null;
+};
+
+export type AssistantImportDetail = {
+  import: AssistantImportSummary;
+  rows: AssistantImportRow[];
+  counts: Record<string, number>;
+  pagination: { total: number; page: number; limit: number; totalPages: number };
+};
+
+export type AssistantUsage = {
+  today: { day: string; messages: number; importPages: number; costUsd: number };
+  limits: {
+    dailyMessages: number;
+    dailyImportPages: number;
+    maxImportRows: number;
+    maxCreatesPerTurn: number;
+  };
+  last30Days: {
     messages: number;
-    totalTokens: number;
-    averageLatencyMs: number;
+    importPages: number;
+    promptTokens: number;
+    completionTokens: number;
+    costUsd: number;
   };
-  recent: {
-    id: string;
-    model: string;
-    intent: string | null;
-    proposalCount: number;
-    totalTokens: number | null;
-    latencyMs: number;
-    createdAt: string;
-  }[];
 };
 
-export async function parseAssistantMessage(
-  input: {
-    message: string;
-    history?: AssistantHistoryMessage[];
-    timezone?: string;
-    now?: string;
-    conversationId?: string;
-  },
+export type LocalFile = {
+  uri: string;
+  name: string;
+  type: string;
+  file?: File;
+};
+
+export type AssistantConfirmItem =
+  | {
+      kind: 'CREATE';
+      amount: number;
+      categoryId?: string | null;
+      newCategoryName?: string | null;
+      newCategoryType?: CategoryType;
+      date: string;
+      note?: string;
+      source?: 'TEXT' | 'IMAGE' | 'AUDIO' | 'IMPORT';
+      proposalId?: string;
+    }
+  | {
+      kind: 'UPDATE';
+      targetId: string;
+      changes: { amount?: number; categoryId?: string; date?: string; note?: string | null };
+      operationId?: string;
+    }
+  | { kind: 'DELETE'; targetId: string; operationId?: string };
+
+function appendLocalFile(form: FormData, field: string, file: LocalFile): void {
+  if (file.file) {
+    form.append(field, file.file);
+    return;
+  }
+  form.append(field, {
+    uri: file.uri,
+    name: file.name,
+    type: file.type,
+  } as unknown as Blob);
+}
+
+async function apiUploadForm<T>(
+  path: string,
+  form: FormData,
   accessToken: string,
-): Promise<AssistantParseResult> {
-  return apiFetch<AssistantParseResult>('/assistant/parse', {
+  skipAuthRetry = false,
+): Promise<T> {
+  const headers = new Headers();
+  headers.set('X-Client', 'mobile');
+  headers.set('Authorization', `Bearer ${accessToken}`);
+
+  const response = await fetch(`${API_URL}${path}`, {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: form,
+    headers,
+  });
+
+  if (response.status === 401 && !skipAuthRetry) {
+    const newAccessToken = await refreshAccessToken();
+    if (newAccessToken) {
+      return apiUploadForm<T>(path, form, newAccessToken, true);
+    }
+  }
+
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      data && typeof data === 'object' && 'message' in data
+        ? String(data.message)
+        : `Upload failed (${response.status})`;
+    throw new ApiError(message, response.status);
+  }
+
+  return data as T;
+}
+
+export async function getAssistantStatus(accessToken: string): Promise<AssistantStatus> {
+  return apiFetch<AssistantStatus>('/assistant/status', { accessToken });
+}
+
+export async function recordAssistantConsent(accessToken: string): Promise<{ consentAt: string }> {
+  return apiFetch<{ consentAt: string }>('/assistant/consent', {
+    method: 'POST',
     accessToken,
   });
 }
 
-export async function confirmAssistantProposals(
-  input: {
-    proposals: AssistantConfirmProposal[];
-    requestId?: string;
-    conversationId?: string;
-  },
-  accessToken: string,
-): Promise<Transaction[]> {
-  const res = await apiFetch<{ transactions: Transaction[] }>('/assistant/confirm', {
-    method: 'POST',
-    body: JSON.stringify(input),
-    accessToken,
-  });
-  return res.transactions;
-}
-
-export async function applyAssistantActions(
-  input: {
-    operations?: AssistantApplyOperation[];
-    debtPayments?: { debtId: string; amount: number; date?: string; note?: string | null }[];
-    requestId?: string;
-    conversationId?: string;
-  },
-  accessToken: string,
-): Promise<AssistantApplyResult> {
-  return apiFetch<AssistantApplyResult>('/assistant/apply', {
-    method: 'POST',
-    body: JSON.stringify(input),
-    accessToken,
-  });
-}
-
-export async function undoAssistantTransactions(
-  input: { transactionIds: string[]; requestId?: string },
-  accessToken: string,
-): Promise<{ deleted: number }> {
-  return apiFetch<{ deleted: number }>('/assistant/undo', {
-    method: 'POST',
-    body: JSON.stringify(input),
-    accessToken,
-  });
-}
-
-export async function getAssistantPreferences(
-  accessToken: string,
-): Promise<AssistantPreferences> {
+export async function getAssistantPreferences(accessToken: string): Promise<AssistantPreferences> {
   return apiFetch<AssistantPreferences>('/assistant/preferences', { accessToken });
 }
 
 export async function updateAssistantPreferences(
-  input: AssistantPreferences,
+  input: {
+    autoSaveCreates?: boolean;
+    thinkingMode?: boolean;
+    reasoningEffort?: 'low' | 'high' | 'max';
+    timezone?: string;
+  },
   accessToken: string,
 ): Promise<AssistantPreferences> {
   return apiFetch<AssistantPreferences>('/assistant/preferences', {
@@ -1027,37 +1061,180 @@ export async function updateAssistantPreferences(
   });
 }
 
-export async function listAssistantConversations(
-  accessToken: string,
-  limit = 20,
-): Promise<AssistantConversationSummary[]> {
-  const res = await apiFetch<{ conversations: AssistantConversationSummary[] }>(
-    `/assistant/conversations?limit=${limit}`,
-    { accessToken },
-  );
-  return res.conversations;
+export async function listAssistantThreads(accessToken: string): Promise<AssistantThreadSummary[]> {
+  const result = await apiFetch<{ threads: AssistantThreadSummary[] }>('/assistant/threads', {
+    accessToken,
+  });
+  return result.threads;
 }
 
-export async function getAssistantConversation(
-  conversationId: string,
+export async function createAssistantThread(
   accessToken: string,
-): Promise<AssistantConversationDetail> {
-  return apiFetch<AssistantConversationDetail>(
-    `/assistant/conversations/${encodeURIComponent(conversationId)}`,
-    { accessToken },
-  );
+  title?: string,
+): Promise<{ id: string; title: string }> {
+  const result = await apiFetch<{ thread: { id: string; title: string } }>('/assistant/threads', {
+    method: 'POST',
+    body: JSON.stringify(title ? { title } : {}),
+    accessToken,
+  });
+  return result.thread;
 }
 
-export async function deleteAssistantConversation(
-  conversationId: string,
+export async function getAssistantThread(
+  threadId: string,
   accessToken: string,
-): Promise<void> {
-  await apiFetch<null>(`/assistant/conversations/${encodeURIComponent(conversationId)}`, {
+): Promise<{
+  thread: { id: string; title: string; createdAt: string; updatedAt: string };
+  messages: AssistantMessageRecord[];
+  imports: AssistantImportSummary[];
+}> {
+  return apiFetch(`/assistant/threads/${threadId}`, { accessToken });
+}
+
+export async function deleteAssistantThread(threadId: string, accessToken: string): Promise<void> {
+  await apiFetch<{ message: string }>(`/assistant/threads/${threadId}`, {
     method: 'DELETE',
     accessToken,
   });
 }
 
-export async function getAssistantUsage(accessToken: string): Promise<AssistantUsageStats> {
-  return apiFetch<AssistantUsageStats>('/assistant/usage', { accessToken });
+export async function sendAssistantMessage(
+  threadId: string,
+  input: { text: string; timezone?: string },
+  accessToken: string,
+): Promise<AssistantTurnResponse> {
+  return apiFetch<AssistantTurnResponse>(`/assistant/threads/${threadId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+}
+
+export async function uploadAssistantAttachment(
+  threadId: string,
+  input: { file: LocalFile; kind: 'IMAGE' | 'AUDIO'; timezone?: string },
+  accessToken: string,
+): Promise<AssistantTurnResponse | { transcript: string; durationMs: number | null }> {
+  const form = new FormData();
+  form.append('kind', input.kind);
+  appendLocalFile(form, 'file', input.file);
+  if (input.timezone) form.append('timezone', input.timezone);
+
+  return apiUploadForm(`/assistant/threads/${threadId}/attachments`, form, accessToken);
+}
+
+export async function confirmAssistantActions(
+  input: {
+    clientRequestId: string;
+    threadId?: string;
+    messageId?: string;
+    timezone?: string;
+    items: AssistantConfirmItem[];
+  },
+  accessToken: string,
+): Promise<{
+  batchId: string;
+  created: number;
+  updated: number;
+  deleted: number;
+  transactions: AssistantTransactionSnapshot[];
+  undoUntil: string;
+}> {
+  return apiFetch('/assistant/actions/confirm', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+}
+
+export async function undoAssistantBatch(
+  batchId: string,
+  accessToken: string,
+): Promise<{ undone: boolean; restored: number; deleted: number }> {
+  return apiFetch(`/assistant/actions/${batchId}/undo`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function startStatementImport(
+  input: { file: LocalFile; threadId?: string; timezone?: string },
+  accessToken: string,
+): Promise<AssistantImportSummary> {
+  const form = new FormData();
+  appendLocalFile(form, 'file', input.file);
+  if (input.threadId) form.append('threadId', input.threadId);
+  if (input.timezone) form.append('timezone', input.timezone);
+
+  const result = await apiUploadForm<{ import: AssistantImportSummary }>(
+    '/assistant/imports',
+    form,
+    accessToken,
+  );
+  return result.import;
+}
+
+export async function getStatementImport(
+  importId: string,
+  accessToken: string,
+  options: { page?: number; status?: string; limit?: number } = {},
+): Promise<AssistantImportDetail> {
+  const qs = new URLSearchParams();
+  if (options.page) qs.set('page', String(options.page));
+  if (options.status) qs.set('status', options.status);
+  if (options.limit) qs.set('limit', String(options.limit));
+
+  return apiFetch(`/assistant/imports/${importId}?${qs.toString()}`, { accessToken });
+}
+
+export async function listStatementImports(
+  accessToken: string,
+): Promise<AssistantImportSummary[]> {
+  const result = await apiFetch<{ imports: AssistantImportSummary[] }>('/assistant/imports', {
+    accessToken,
+  });
+  return result.imports;
+}
+
+export async function commitStatementImport(
+  importId: string,
+  input: {
+    clientRequestId: string;
+    timezone?: string;
+    rows: Array<{
+      rowId: string;
+      include?: boolean;
+      amount?: number;
+      categoryId?: string | null;
+      newCategoryName?: string | null;
+      newCategoryType?: CategoryType;
+      date?: string;
+      note?: string;
+    }>;
+  },
+  accessToken: string,
+): Promise<{ batchId: string; imported: number; skipped: number; undoUntil: string }> {
+  return apiFetch(`/assistant/imports/${importId}/commit`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+}
+
+export async function discardStatementImport(importId: string, accessToken: string): Promise<void> {
+  await apiFetch<{ message: string }>(`/assistant/imports/${importId}`, {
+    method: 'DELETE',
+    accessToken,
+  });
+}
+
+export async function getAssistantUsage(accessToken: string): Promise<AssistantUsage> {
+  return apiFetch<AssistantUsage>('/assistant/usage', { accessToken });
+}
+
+export async function eraseAssistantData(accessToken: string): Promise<void> {
+  await apiFetch<{ message: string }>('/assistant/data', {
+    method: 'DELETE',
+    accessToken,
+  });
 }

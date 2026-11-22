@@ -1,38 +1,51 @@
-import ConfirmDialog from '@/components/ConfirmDialog';
+import ProposalEditor from '@/components/assistant/ProposalEditor';
+import StatementReviewModal from '@/components/assistant/StatementReviewModal';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import {
-  applyAssistantActions,
-  confirmAssistantProposals,
-  deleteAssistantConversation,
-  getAssistantConversation,
+  confirmAssistantActions,
+  createAssistantThread,
+  deleteAssistantThread,
   getAssistantPreferences,
+  getAssistantStatus,
+  getAssistantThread,
   getAssistantUsage,
-  isApiError,
-  listAssistantConversations,
+  listAssistantThreads,
   listCategories,
-  parseAssistantMessage,
-  undoAssistantTransactions,
+  recordAssistantConsent,
+  sendAssistantMessage,
+  startStatementImport,
+  undoAssistantBatch,
   updateAssistantPreferences,
-  type AssistantApplyOperation,
-  type AssistantConversationSummary,
-  type AssistantDebtPayment,
-  type AssistantHistoryMessage,
+  uploadAssistantAttachment,
+  type AssistantConfirmItem,
+  type AssistantImportSummary,
+  type AssistantMessageRecord,
   type AssistantOperation,
-  type AssistantParseResult,
-  type AssistantProposal,
+  type AssistantPreferences,
   type AssistantQueryResult,
-  type AssistantStoredMessage,
-  type AssistantUsageStats,
+  type AssistantStatus,
+  type AssistantThreadSummary,
+  type AssistantTurnResponse,
+  type AssistantUsage,
   type Category,
-  type CategoryType,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { formatCurrency, TYPE_COLORS, TYPE_LABEL } from '@/lib/format';
+import { formatCurrency, formatDateOnly } from '@/lib/format';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import {
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -45,1775 +58,1072 @@ import {
   View,
 } from 'react-native';
 
-type Draft = {
-  id: string;
-  amount: number;
-  type: CategoryType;
-  categoryId: string | null;
-  categoryName: string | null;
-  suggestedCategoryName: string | null;
-  date: string;
-  note: string;
-  confidence: number;
-  newCategoryName: string;
-};
-
-type ChatMessage = {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  drafts?: Draft[];
-  operations?: AssistantOperation[];
-  debtPayments?: AssistantDebtPayment[];
-  queryResult?: AssistantQueryResult | null;
-  clarifications?: string[];
-  saved?: boolean;
-  savedCount?: number;
-  autoSaved?: boolean;
-  undone?: boolean;
-  applied?: boolean;
-  appliedCount?: number;
-  error?: string;
-  /** The user message that failed, kept so the Retry action can resend it. */
-  retryText?: string;
-};
-
-const WELCOME: ChatMessage = {
-  id: 'welcome',
-  role: 'assistant',
-  content:
-    "Hi! Tell me what you spent, earned, saved, or invested — or ask about your money. I can also edit or delete recent transactions and record debt payments, always for you to review first.",
-};
-
 const SUGGESTIONS = [
-  'Spent ₹450 on groceries at BigBasket yesterday',
+  'Spent 450 on groceries yesterday',
+  'Got salary 85,000 today',
   'How much did I spend on food this month?',
-  'Show my last 5 expenses',
-  'Change my last cab ride to ₹1,500',
-  'Delete my last transaction',
-  'Paid Ravi ₹5,000 towards his loan',
 ];
 
-const TYPE_ORDER: CategoryType[] = ['INCOME', 'EXPENSE', 'SAVING', 'INVESTMENT'];
-const UNDO_WINDOW_MS = 10_000;
+const EFFORT_LABEL: Record<'low' | 'high' | 'max', string> = {
+  low: 'Low',
+  high: 'High',
+  max: 'Max',
+};
 
-function newId(): string {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+function ReasoningBlock({ reasoning }: { reasoning: string }) {
+  const theme = useThemeColors();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <View style={[styles.reasoningBox, { borderColor: theme.border, backgroundColor: theme.card }]}>
+      <Pressable onPress={() => setOpen((value) => !value)} style={styles.reasoningHeader}>
+        <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={14} color={theme.muted} />
+        <Text style={{ color: theme.muted, fontSize: 11, fontWeight: '600' }}>
+          {open ? 'Hide thinking' : 'Show thinking'}
+        </Text>
+      </Pressable>
+      {open && (
+        <ScrollView style={{ maxHeight: 220 }}>
+          <Text style={{ color: theme.muted, fontSize: 11, lineHeight: 17, padding: 10 }}>
+            {reasoning}
+          </Text>
+        </ScrollView>
+      )}
+    </View>
+  );
 }
 
-function getTimeZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
-  } catch {
-    return 'Asia/Kolkata';
-  }
+function QueryResultCard({ result }: { result: AssistantQueryResult }) {
+  const theme = useThemeColors();
+  return (
+    <View style={[styles.queryCard, { borderColor: theme.border, backgroundColor: theme.card }]}>
+      <Text style={{ color: theme.muted, fontSize: 11, textTransform: 'uppercase' }}>
+        {result.count} transaction{result.count === 1 ? '' : 's'}
+      </Text>
+      <Text style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800', marginTop: 2 }}>
+        {formatCurrency(result.total, 0)}
+      </Text>
+      {result.groups.slice(0, 4).map((group) => (
+        <View key={group.key} style={styles.groupRow}>
+          <Text style={{ color: theme.muted, fontSize: 12, flex: 1 }} numberOfLines={1}>
+            {group.key}
+          </Text>
+          <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>
+            {formatCurrency(group.total, 0)}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
 }
 
-function makeDraft(proposal: AssistantProposal): Draft {
-  return {
-    id: newId(),
-    amount: proposal.amount,
-    type: proposal.type,
-    categoryId: proposal.categoryId,
-    categoryName: proposal.categoryName,
-    suggestedCategoryName: proposal.suggestedCategoryName,
-    date: proposal.date,
-    note: proposal.note ?? '',
-    confidence: proposal.confidence,
-    newCategoryName: proposal.categoryId ? '' : (proposal.suggestedCategoryName ?? ''),
-  };
-}
+function OperationRow({
+  operation,
+  disabled,
+  onConfirm,
+}: {
+  operation: AssistantOperation;
+  disabled?: boolean;
+  onConfirm: (item: AssistantConfirmItem) => Promise<void>;
+}) {
+  const theme = useThemeColors();
+  const [working, setWorking] = useState(false);
+  const isDelete = operation.kind === 'DELETE';
 
-function validateDrafts(drafts: Draft[]): string | null {
-  if (drafts.length === 0) return 'There is nothing to save.';
-  for (const draft of drafts) {
-    if (!draft.amount || draft.amount <= 0) return 'Every transaction needs a positive amount.';
-    if (!draft.categoryId && !draft.newCategoryName.trim()) {
-      return 'Pick a category or enter a name for a new one.';
+  async function confirm() {
+    setWorking(true);
+    try {
+      await onConfirm(
+        isDelete
+          ? { kind: 'DELETE', targetId: operation.targetId, operationId: operation.operationId }
+          : {
+              kind: 'UPDATE',
+              targetId: operation.targetId,
+              changes: operation.changes,
+              operationId: operation.operationId,
+            },
+      );
+    } catch (error) {
+      Alert.alert('Could not apply change', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setWorking(false);
     }
   }
-  return null;
+
+  return (
+    <View
+      style={[
+        styles.operationCard,
+        {
+          borderColor: isDelete ? '#fecaca' : '#fde68a',
+          backgroundColor: isDelete ? '#fef2f2' : '#fffbeb',
+        },
+      ]}>
+      <Text style={{ color: isDelete ? theme.danger : '#92400e', fontSize: 11, fontWeight: '800' }}>
+        {isDelete ? 'DELETE' : 'EDIT'}
+      </Text>
+      <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '600', marginTop: 4 }}>
+        {operation.before.categoryName} · {formatCurrency(operation.before.amount)} ·{' '}
+        {formatDateOnly(operation.before.date)}
+      </Text>
+      {operation.before.note ? (
+        <Text style={{ color: theme.muted, fontSize: 12 }}>“{operation.before.note}”</Text>
+      ) : null}
+      {!isDelete && operation.after ? (
+        <Text style={{ color: theme.colors.text, fontSize: 12, marginTop: 6 }}>
+          → {operation.after.categoryName} · {formatCurrency(operation.after.amount)}
+        </Text>
+      ) : null}
+      <View style={styles.operationActions}>
+        <Pressable
+          onPress={() =>
+            Alert.alert(
+              isDelete ? 'Delete transaction?' : 'Apply this change?',
+              isDelete ? 'You can undo it for 10 seconds.' : 'The transaction will be updated.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: isDelete ? 'Delete' : 'Confirm',
+                  style: isDelete ? 'destructive' : 'default',
+                  onPress: () => void confirm(),
+                },
+              ],
+            )
+          }
+          disabled={working || disabled}
+          style={[
+            styles.operationButton,
+            { backgroundColor: isDelete ? theme.danger : '#d97706', opacity: working ? 0.6 : 1 },
+          ]}>
+          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>
+            {working ? 'Working…' : isDelete ? 'Delete' : 'Review change'}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
 }
 
-function storedToMessages(stored: AssistantStoredMessage[]): ChatMessage[] {
-  const restored: ChatMessage[] = stored.map((message) => {
-    if (message.role === 'USER') {
-      return { id: message.id, role: 'user', content: message.content };
-    }
+function MessageBubble({
+  message,
+  categories,
+  disabled,
+  onConfirm,
+}: {
+  message: AssistantMessageRecord;
+  categories: Category[];
+  disabled?: boolean;
+  onConfirm: (items: AssistantConfirmItem[], messageId: string) => Promise<void>;
+}) {
+  const theme = useThemeColors();
+  const isUser = message.role === 'user';
+  const turn = message.turn;
 
-    const payload = message.payload;
-    return {
-      id: message.id,
-      role: 'assistant',
-      content: message.content,
-      drafts: payload?.proposals?.map(makeDraft),
-      operations: payload?.operations ?? [],
-      debtPayments: payload?.debtPayments ?? [],
-      queryResult: payload?.queryResult ?? null,
-      clarifications: payload?.clarifications ?? [],
-      saved: Boolean(payload?.saved),
-      savedCount: payload?.transactionIds?.length ?? 0,
-      applied: Boolean(payload?.applied),
-      appliedCount:
-        (payload?.updatedTransactionIds?.length ?? 0) +
-        (payload?.deletedTransactionIds?.length ?? 0) +
-        (payload?.debtIds?.length ?? 0),
-    };
-  });
-
-  let savedLater = false;
-  let appliedLater = false;
-
-  for (let index = restored.length - 1; index >= 0; index -= 1) {
-    const message = restored[index]!;
-    if (message.drafts && message.drafts.length > 0 && savedLater) {
-      message.saved = true;
-      message.savedCount = message.savedCount ?? message.drafts.length;
-    }
-    if (
-      ((message.operations?.length ?? 0) > 0 || (message.debtPayments?.length ?? 0) > 0) &&
-      appliedLater
-    ) {
-      message.applied = true;
-    }
-    if (message.saved) savedLater = true;
-    if (message.applied) appliedLater = true;
-  }
-
-  return restored;
-}
-
-function toApplyOperation(operation: AssistantOperation): AssistantApplyOperation {
-  if (operation.action === 'DELETE') {
-    return { action: 'DELETE', transactionId: operation.transactionId };
-  }
-
-  const after = operation.after;
-  if (!after) {
-    return { action: 'UPDATE', transactionId: operation.transactionId };
-  }
-
-  return {
-    action: 'UPDATE',
-    transactionId: operation.transactionId,
-    amount: after.amount,
-    date: after.date,
-    note: after.note,
-    ...(after.categoryId ? { categoryId: after.categoryId } : {}),
-  };
-}
-
-function assistantMessageFromResult(result: AssistantParseResult): ChatMessage {
-  const clarifications = [...result.clarifications];
-  if (result.categoriesEmpty && result.proposals.length > 0) {
-    clarifications.push(
-      "You don't have any categories yet. Confirm the suggested names to create them with these transactions.",
+  if (isUser) {
+    return (
+      <View style={styles.userRow}>
+        <View style={styles.userBubble}>
+          <Text style={{ color: '#fff', fontSize: 14 }}>
+            {message.kind === 'IMAGE'
+              ? `Bill photo${message.attachment?.filename ? ` · ${message.attachment.filename}` : ''}`
+              : message.text ?? 'Voice note'}
+          </Text>
+        </View>
+      </View>
     );
   }
 
-  return {
-    id: newId(),
-    role: 'assistant',
-    content: result.reply,
-    drafts: result.proposals.map(makeDraft),
-    operations: result.operations,
-    debtPayments: result.debtPayments,
-    queryResult: result.queryResult,
-    clarifications,
-  };
-}
+  const savedProposals = new Set(turn?.savedProposalIds ?? []);
+  const savedOperations = new Set(turn?.savedOperationIds ?? []);
+  const proposals = turn?.proposals.filter((p) => !savedProposals.has(p.proposalId)) ?? [];
+  const operations = turn?.operations.filter((o) => !savedOperations.has(o.operationId)) ?? [];
 
-function formatDateTime(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function formatRelative(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-
-  const diffMinutes = Math.round((date.getTime() - Date.now()) / 60000);
-  const absMinutes = Math.abs(diffMinutes);
-
-  // Intl.RelativeTimeFormat is not available on Hermes (Android), so format manually.
-  if (absMinutes < 1) return 'just now';
-  if (absMinutes < 60) return diffMinutes < 0 ? `${absMinutes} min ago` : `in ${absMinutes} min`;
-
-  const hours = Math.round(diffMinutes / 60);
-  if (Math.abs(hours) < 24) {
-    return hours < 0 ? `${Math.abs(hours)} hr ago` : `in ${Math.abs(hours)} hr`;
-  }
-
-  const days = Math.round(hours / 24);
-  if (Math.abs(days) < 30) {
-    return days < 0 ? `${Math.abs(days)} d ago` : `in ${Math.abs(days)} d`;
-  }
-
-  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-/** Turns transport/HTTP failures into something the user can act on. */
-function describeAssistantError(error: unknown): string {
-  if (isApiError(error)) {
-    if (error.status === 404) {
-      return 'The assistant is not available on this API server. The app is connected to an API deployment that does not include the assistant endpoints yet.';
-    }
-    if (error.status === 401) {
-      return 'Your session expired. Please sign in again.';
-    }
-    return error.message;
-  }
-  if (error instanceof TypeError) {
-    return 'Could not reach the server. Check your internet connection and try again.';
-  }
-  return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
+  return (
+    <View style={styles.assistantRow}>
+      <View style={{ maxWidth: '94%', gap: 6 }}>
+        <View style={[styles.assistantBubble, { backgroundColor: theme.card, borderColor: theme.border }]}>
+          <Text style={{ color: theme.colors.text, fontSize: 14, lineHeight: 20 }}>
+            {turn?.reply || message.text || '…'}
+          </Text>
+        </View>
+        {message.reasoning ? <ReasoningBlock reasoning={message.reasoning} /> : null}
+        {turn?.clarifications?.map((clarification) => (
+          <View key={clarification} style={styles.clarification}>
+            <Text style={{ color: '#92400e', fontSize: 11 }}>{clarification}</Text>
+          </View>
+        ))}
+        {proposals.map((proposal) => (
+          <ProposalEditor
+            key={proposal.proposalId}
+            proposal={proposal}
+            categories={categories}
+            disabled={disabled}
+            onSave={(item) => onConfirm([item], message.id)}
+          />
+        ))}
+        {operations.map((operation) => (
+          <OperationRow
+            key={operation.operationId}
+            operation={operation}
+            disabled={disabled}
+            onConfirm={(item) => onConfirm([item], message.id)}
+          />
+        ))}
+        {turn?.queryResult ? <QueryResultCard result={turn.queryResult} /> : null}
+      </View>
+    </View>
+  );
 }
 
 export default function AssistantScreen() {
   const { accessToken } = useAuth();
   const theme = useThemeColors();
-  const router = useRouter();
 
-  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);
-  const [input, setInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [savingMessageId, setSavingMessageId] = useState<string | null>(null);
-  const [applyingMessageId, setApplyingMessageId] = useState<string | null>(null);
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [status, setStatus] = useState<AssistantStatus | null>(null);
+  const [preferences, setPreferences] = useState<AssistantPreferences | null>(null);
+  const [threads, setThreads] = useState<AssistantThreadSummary[]>([]);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<AssistantMessageRecord[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [categoriesError, setCategoriesError] = useState<string | null>(null);
-
-  const [autoSave, setAutoSave] = useState(false);
-  const [preferencesReady, setPreferencesReady] = useState(false);
-  const [preferenceError, setPreferenceError] = useState<string | null>(null);
-
-  const [picker, setPicker] = useState<{ messageId: string; draftId: string } | null>(null);
-  const [pendingAction, setPendingAction] = useState<{ messageId: string } | null>(null);
-
+  const [usage, setUsage] = useState<AssistantUsage | null>(null);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [uploadLabel, setUploadLabel] = useState<string | null>(null);
+  const [pendingText, setPendingText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [conversations, setConversations] = useState<AssistantConversationSummary[]>([]);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [usage, setUsage] = useState<AssistantUsageStats | null>(null);
-
-  const [undo, setUndo] = useState<{
-    messageId: string;
-    transactionIds: string[];
-    expiresAt: number;
-  } | null>(null);
-  const [undoSeconds, setUndoSeconds] = useState(0);
-  const [isUndoing, setIsUndoing] = useState(false);
+  const [statementOpen, setStatementOpen] = useState(false);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [statementImport, setStatementImport] = useState<AssistantImportSummary | null>(null);
+  const [consentDismissed, setConsentDismissed] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
+  const stopRecordingRef = useRef<() => Promise<void>>(async () => {});
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+
+  const refreshThreads = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      setThreads(await listAssistantThreads(accessToken));
+    } catch {
+      // Non-fatal.
+    }
+  }, [accessToken]);
+
+  const loadThread = useCallback(
+    async (id: string) => {
+      if (!accessToken) return;
+      const detail = await getAssistantThread(id, accessToken);
+      setThreadId(id);
+      setMessages(detail.messages);
+    },
+    [accessToken],
+  );
 
   useEffect(() => {
     if (!accessToken) return;
+    let mounted = true;
 
-    void (async () => {
+    async function load() {
       try {
-        setCategories(await listCategories(accessToken));
-      } catch (error) {
-        setCategoriesError(error instanceof Error ? error.message : 'Could not load categories');
-      }
-    })();
-
-    void (async () => {
-      try {
-        const preferences = await getAssistantPreferences(accessToken);
-        setAutoSave(preferences.autoSave);
-      } catch {
-        // Optional preference; default to review-before-save.
+        const [nextStatus, prefs, cats, nextThreads, nextUsage] = await Promise.all([
+          getAssistantStatus(accessToken!),
+          getAssistantPreferences(accessToken!),
+          listCategories(accessToken!),
+          listAssistantThreads(accessToken!),
+          getAssistantUsage(accessToken!),
+        ]);
+        if (!mounted) return;
+        setStatus(nextStatus);
+        setPreferences(prefs);
+        setCategories(cats);
+        setThreads(nextThreads);
+        setUsage(nextUsage);
+        if (nextThreads[0]) await loadThread(nextThreads[0].id);
+      } catch (loadError) {
+        if (mounted) setError(loadError instanceof Error ? loadError.message : 'Could not load the assistant.');
       } finally {
-        setPreferencesReady(true);
+        if (mounted) setIsLoading(false);
       }
-    })();
+    }
+
+    void load();
+    return () => {
+      mounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
   useEffect(() => {
-    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
-    return () => clearTimeout(timer);
-  }, [messages, isSending]);
+    if (recorderState.isRecording && recorderState.durationMillis >= 118_000) {
+      void stopRecordingRef.current();
+    }
+  }, [recorderState.durationMillis, recorderState.isRecording]);
 
-  useEffect(() => {
-    if (!undo) {
-      setUndoSeconds(0);
+  const consentRequired = Boolean(status?.enabled) && (status?.consentRequired ?? false);
+  const disabled = isSending || voiceBusy || !status?.enabled || consentRequired;
+
+  async function ensureThread(): Promise<string> {
+    if (!accessToken) throw new Error('Please sign in again.');
+    if (threadId) return threadId;
+    const thread = await createAssistantThread(accessToken);
+    setThreadId(thread.id);
+    await refreshThreads();
+    return thread.id;
+  }
+
+  async function reload(id: string) {
+    await loadThread(id);
+    await refreshThreads();
+    if (accessToken) {
+      getAssistantUsage(accessToken).then(setUsage).catch(() => {});
+    }
+  }
+
+  function afterTurn(response: AssistantTurnResponse) {
+    if (response.autoSaved) {
+      Alert.alert(
+        'Saved',
+        `${response.autoSaved.created} transaction${response.autoSaved.created === 1 ? '' : 's'} saved.`,
+        [
+          { text: 'OK' },
+          {
+            text: 'Undo',
+            onPress: () => void undo(response.autoSaved!.batchId),
+          },
+        ],
+      );
+    }
+    if (response.autoSaveError) Alert.alert('Could not auto-save', response.autoSaveError);
+  }
+
+  async function send(text?: string) {
+    const value = (text ?? input).trim();
+    if (!value || disabled || !accessToken) return;
+    if (consentRequired) {
+      Alert.alert('One-time notice', 'Please accept the assistant privacy notice first.');
       return;
     }
 
-    const tick = () => {
-      const remaining = Math.max(0, Math.ceil((undo.expiresAt - Date.now()) / 1000));
-      setUndoSeconds(remaining);
-      if (remaining <= 0) setUndo(null);
-    };
-
-    tick();
-    const timer = setInterval(tick, 500);
-    return () => clearInterval(timer);
-  }, [undo]);
-
-  function updateDraft(messageId: string, draftId: string, patch: Partial<Draft>) {
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === messageId
-          ? {
-              ...message,
-              drafts: message.drafts?.map((draft) =>
-                draft.id === draftId ? { ...draft, ...patch } : draft,
-              ),
-            }
-          : message,
-      ),
-    );
-  }
-
-  function removeDraft(messageId: string, draftId: string) {
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === messageId
-          ? { ...message, drafts: message.drafts?.filter((draft) => draft.id !== draftId) }
-          : message,
-      ),
-    );
-  }
-
-  function setMessageError(messageId: string, error: string) {
-    setMessages((current) =>
-      current.map((message) => (message.id === messageId ? { ...message, error } : message)),
-    );
-  }
-
-  async function send() {
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
-    await sendText(text);
-  }
-
-  async function sendText(text: string) {
-    if (!text || isSending || !accessToken) return;
-
-    const userMessage: ChatMessage = { id: newId(), role: 'user', content: text };
-    const history: AssistantHistoryMessage[] = conversationId
-      ? []
-      : messages
-          .filter((message) => !message.error && message.id !== 'welcome')
-          .slice(-8)
-          .map((message) => ({ role: message.role, content: message.content }));
-
-    setMessages((current) => [...current, userMessage]);
     setIsSending(true);
+    setError(null);
+    setInput('');
+    setPendingText(value);
 
     try {
-      const result = await parseAssistantMessage(
-        {
-          message: text,
-          ...(history.length > 0 ? { history } : {}),
-          ...(conversationId ? { conversationId } : {}),
-          timezone: getTimeZone(),
-          now: new Date().toISOString(),
-        },
+      const id = await ensureThread();
+      const response = await sendAssistantMessage(
+        id,
+        { text: value, ...(preferences?.timezone ? { timezone: preferences.timezone } : {}) },
         accessToken,
       );
-
-      const resolvedConversationId = result.conversationId ?? conversationId;
-      if (result.conversationId) setConversationId(result.conversationId);
-
-      const assistantMessage = assistantMessageFromResult(result);
-      setMessages((current) => [...current, assistantMessage]);
-
-      if (
-        autoSave &&
-        result.intent === 'ADD_TRANSACTIONS' &&
-        (assistantMessage.drafts?.length ?? 0) > 0
-      ) {
-        await saveDrafts(
-          assistantMessage.id,
-          assistantMessage.drafts!,
-          resolvedConversationId,
-          true,
-        );
-      }
-    } catch (error) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: newId(),
-          role: 'assistant',
-          content: '',
-          error: describeAssistantError(error),
-          retryText: text,
-        },
-      ]);
+      await reload(id);
+      afterTurn(response);
+    } catch (sendError) {
+      setInput(value);
+      const message = sendError instanceof Error ? sendError.message : 'Could not send that message.';
+      setError(message);
+      Alert.alert('Assistant', message);
     } finally {
+      setPendingText(null);
       setIsSending(false);
     }
   }
 
-  async function saveDrafts(
-    messageId: string,
-    drafts: Draft[],
-    targetConversationId: string | null,
-    isAuto = false,
-  ) {
-    if (!accessToken) return;
-
-    const validationError = validateDrafts(drafts);
-    if (validationError) {
-      setMessageError(messageId, validationError);
-      return;
-    }
-
-    setSavingMessageId(messageId);
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === messageId ? { ...message, error: undefined } : message,
-      ),
+  async function confirm(items: AssistantConfirmItem[], messageId: string) {
+    if (!accessToken) throw new Error('Please sign in again.');
+    const result = await confirmAssistantActions(
+      {
+        clientRequestId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        ...(threadId ? { threadId } : {}),
+        messageId,
+        ...(preferences?.timezone ? { timezone: preferences.timezone } : {}),
+        items,
+      },
+      accessToken,
     );
+    if (threadId) await reload(threadId);
+    const count = result.created + result.updated + result.deleted;
+    Alert.alert('Saved', `${count} change${count === 1 ? '' : 's'} saved.`, [
+      { text: 'OK' },
+      {
+        text: 'Undo',
+        onPress: () => void undo(result.batchId),
+      },
+    ]);
+  }
 
+  async function undo(batchId: string) {
+    if (!accessToken) return;
     try {
-      const transactions = await confirmAssistantProposals(
-        {
-          requestId: newId(),
-          ...(targetConversationId ? { conversationId: targetConversationId } : {}),
-          proposals: drafts.map((draft) => ({
-            amount: draft.amount,
-            ...(draft.categoryId
-              ? { categoryId: draft.categoryId }
-              : {
-                  newCategory: {
-                    name: draft.newCategoryName.trim(),
-                    type: draft.type,
-                  },
-                }),
-            note: draft.note.trim() || null,
-            date: draft.date,
-          })),
-        },
-        accessToken,
-      );
+      await undoAssistantBatch(batchId, accessToken);
+      if (threadId) await reload(threadId);
+    } catch (undoError) {
+      Alert.alert('Could not undo', undoError instanceof Error ? undoError.message : 'Please try again.');
+    }
+  }
 
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === messageId
-            ? {
-                ...message,
-                saved: true,
-                savedCount: transactions.length,
-                autoSaved: isAuto,
-                undone: false,
-                error: undefined,
-              }
-            : message,
-        ),
-      );
-
-      if (transactions.length > 0) {
-        setUndo({
-          messageId,
-          transactionIds: transactions.map((transaction) => transaction.id),
-          expiresAt: Date.now() + UNDO_WINDOW_MS,
-        });
+  async function pickImage(source: 'camera' | 'library') {
+    try {
+      if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Camera permission needed', 'Allow camera access to photograph a bill.');
+          return;
+        }
+      } else {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Photo permission needed', 'Allow photo access to choose a bill.');
+          return;
+        }
       }
 
-      setCategories(await listCategories(accessToken).catch(() => categories));
-    } catch (error) {
-      setMessageError(messageId, describeAssistantError(error));
-    } finally {
-      setSavingMessageId(null);
-    }
-  }
+      const result =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync({
+              mediaTypes: ['images'],
+              quality: 0.7,
+              preferredAssetRepresentationMode:
+                ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+            })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ['images'],
+              quality: 0.7,
+              preferredAssetRepresentationMode:
+                ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+            });
 
-  async function handleUndo() {
-    if (!undo || !accessToken || isUndoing) return;
-    const current = undo;
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
 
-    setIsUndoing(true);
-    try {
-      await undoAssistantTransactions(
-        { transactionIds: current.transactionIds, requestId: newId() },
-        accessToken,
-      );
-
-      setMessages((messages) =>
-        messages.map((message) =>
-          message.id === current.messageId
-            ? { ...message, saved: false, savedCount: 0, undone: true }
-            : message,
-        ),
-      );
-      setUndo(null);
-    } catch (error) {
-      setMessageError(current.messageId, describeAssistantError(error));
-    } finally {
-      setIsUndoing(false);
-    }
-  }
-
-  function requestApply(message: ChatMessage) {
-    const hasDelete = (message.operations ?? []).some((operation) => operation.action === 'DELETE');
-    const hasPayments = (message.debtPayments?.length ?? 0) > 0;
-
-    if (hasDelete || hasPayments) {
-      setPendingAction({ messageId: message.id });
-      return;
-    }
-
-    void applyMessage(message.id);
-  }
-
-  async function applyMessage(messageId: string) {
-    if (!accessToken) return;
-    const message = messages.find((item) => item.id === messageId);
-    if (!message) return;
-
-    const operations = message.operations ?? [];
-    const debtPayments = message.debtPayments ?? [];
-    if (operations.length === 0 && debtPayments.length === 0) return;
-
-    setApplyingMessageId(messageId);
-    setMessages((current) =>
-      current.map((item) => (item.id === messageId ? { ...item, error: undefined } : item)),
-    );
-
-    try {
-      await applyAssistantActions(
+      setUploadLabel('Reading your bill…');
+      setIsSending(true);
+      const id = await ensureThread();
+      const response = await uploadAssistantAttachment(
+        id,
         {
-          requestId: newId(),
-          ...(conversationId ? { conversationId } : {}),
-          ...(operations.length > 0 ? { operations: operations.map(toApplyOperation) } : {}),
-          ...(debtPayments.length > 0
-            ? {
-                debtPayments: debtPayments.map((payment) => ({
-                  debtId: payment.debtId,
-                  amount: payment.amount,
-                  date: payment.date,
-                  note: payment.note,
-                })),
-              }
-            : {}),
+          file: {
+            uri: asset.uri,
+            name: asset.fileName ?? 'bill.jpg',
+            type: asset.mimeType ?? 'image/jpeg',
+            ...(asset.file ? { file: asset.file } : {}),
+          },
+          kind: 'IMAGE',
+          ...(preferences?.timezone ? { timezone: preferences.timezone } : {}),
+        },
+        accessToken!,
+      );
+      await reload(id);
+      if ('turn' in response) afterTurn(response);
+    } catch (pickError) {
+      Alert.alert('Bill photo', pickError instanceof Error ? pickError.message : 'Could not read that bill.');
+    } finally {
+      setUploadLabel(null);
+      setIsSending(false);
+    }
+  }
+
+  async function startRecording() {
+    if (!accessToken || disabled) return;
+    try {
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Microphone permission needed', 'Allow microphone access to record a voice note.');
+        return;
+      }
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch (recordError) {
+      Alert.alert('Voice note', recordError instanceof Error ? recordError.message : 'Could not start recording.');
+    }
+  }
+
+  async function stopRecording() {
+    if (voiceBusy) return;
+    setVoiceBusy(true);
+    try {
+      await recorder.stop();
+      const uri = recorder.uri;
+      if (!uri || !accessToken) return;
+
+      setUploadLabel('Transcribing your voice note…');
+      setIsSending(true);
+      const id = await ensureThread();
+      const response = await uploadAssistantAttachment(
+        id,
+        {
+          file: { uri, name: 'voice-note.m4a', type: 'audio/m4a' },
+          kind: 'AUDIO',
         },
         accessToken,
       );
-
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === messageId
-            ? {
-                ...item,
-                applied: true,
-                appliedCount: operations.length + debtPayments.length,
-                error: undefined,
-              }
-            : item,
-        ),
-      );
-    } catch (error) {
-      setMessageError(messageId, describeAssistantError(error));
+      if ('transcript' in response) {
+        setInput((current) => (current ? `${current} ${response.transcript}` : response.transcript));
+        Alert.alert('Transcript ready', 'Check it in the message box, then send.');
+      }
+    } catch (voiceError) {
+      Alert.alert('Voice note', voiceError instanceof Error ? voiceError.message : 'Could not transcribe that note.');
     } finally {
-      setApplyingMessageId(null);
+      setUploadLabel(null);
+      setIsSending(false);
+      setVoiceBusy(false);
+      setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
     }
   }
 
-  async function toggleAutoSave(next: boolean) {
-    if (!accessToken) return;
-    const previous = autoSave;
+  stopRecordingRef.current = stopRecording;
 
-    setAutoSave(next);
-    setPreferenceError(null);
-
+  async function pickStatement() {
+    if (!accessToken || disabled) return;
     try {
-      const result = await updateAssistantPreferences({ autoSave: next }, accessToken);
-      setAutoSave(result.autoSave);
-    } catch (error) {
-      setAutoSave(previous);
-      setPreferenceError(
-        error instanceof Error ? error.message : 'Could not update the auto-save preference.',
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/pdf',
+          'text/csv',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+        ],
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
+
+      setUploadLabel('Uploading your statement…');
+      setIsSending(true);
+      const id = await ensureThread();
+      const summary = await startStatementImport(
+        {
+          file: {
+            uri: asset.uri,
+            name: asset.name,
+            type: asset.mimeType ?? 'application/pdf',
+            ...(asset.file ? { file: asset.file } : {}),
+          },
+          threadId: id,
+          ...(preferences?.timezone ? { timezone: preferences.timezone } : {}),
+        },
+        accessToken,
       );
+      setStatementImport(summary);
+      setStatementOpen(true);
+    } catch (statementError) {
+      Alert.alert(
+        'Statement',
+        statementError instanceof Error ? statementError.message : 'Could not upload that statement.',
+      );
+    } finally {
+      setUploadLabel(null);
+      setIsSending(false);
     }
   }
 
-  function resetChat() {
-    setMessages([WELCOME]);
+  async function acceptConsent() {
+    if (!accessToken) return;
+    try {
+      await recordAssistantConsent(accessToken);
+      setStatus((current) => (current ? { ...current, consentRequired: false } : current));
+      setPreferences((current) => (current ? { ...current, consentAt: new Date().toISOString() } : current));
+      setConsentDismissed(false);
+    } catch (consentError) {
+      Alert.alert('Could not save', consentError instanceof Error ? consentError.message : 'Please try again.');
+    }
+  }
+
+  async function savePreferences(patch: {
+    autoSaveCreates?: boolean;
+    thinkingMode?: boolean;
+    reasoningEffort?: 'low' | 'high' | 'max';
+  }) {
+    if (!accessToken) return false;
+    const previous = preferences;
+    setPreferences((current) => (current ? { ...current, ...patch } : current));
+    try {
+      setPreferences(await updateAssistantPreferences(patch, accessToken));
+      return true;
+    } catch (toggleError) {
+      setPreferences(previous);
+      Alert.alert('Setting', toggleError instanceof Error ? toggleError.message : 'Could not change that setting.');
+      return false;
+    }
+  }
+
+  async function toggleAutoSave(value: boolean) {
+    await savePreferences({ autoSaveCreates: value });
+  }
+
+  function newChat() {
+    setThreadId(null);
+    setMessages([]);
     setInput('');
-    setConversationId(null);
-    setUndo(null);
-    setIsSending(false);
-    setSavingMessageId(null);
-    setApplyingMessageId(null);
+    setError(null);
     setHistoryOpen(false);
   }
 
-  async function openHistory() {
-    if (!accessToken) return;
-
+  function openHistory() {
+    void refreshThreads();
     setHistoryOpen(true);
-    setIsLoadingHistory(true);
-    setHistoryError(null);
-
-    try {
-      const [list, usageStats] = await Promise.all([
-        listAssistantConversations(accessToken),
-        getAssistantUsage(accessToken).catch(() => null),
-      ]);
-      setConversations(list);
-      setUsage(usageStats);
-    } catch (error) {
-      setHistoryError(error instanceof Error ? error.message : 'Could not load conversations.');
-    } finally {
-      setIsLoadingHistory(false);
-    }
   }
 
-  async function loadConversation(id: string) {
+  async function removeThread(id: string) {
     if (!accessToken) return;
-
-    setIsLoadingHistory(true);
-    setHistoryError(null);
-
-    try {
-      const detail = await getAssistantConversation(id, accessToken);
-      const restored = storedToMessages(detail.messages);
-      setConversationId(detail.conversation.id);
-      setMessages(restored.length > 0 ? restored : [WELCOME]);
-      setHistoryOpen(false);
-      setUndo(null);
-    } catch (error) {
-      setHistoryError(error instanceof Error ? error.message : 'Could not load that conversation.');
-    } finally {
-      setIsLoadingHistory(false);
-    }
+    Alert.alert('Delete conversation?', 'Saved transactions stay in your account.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteAssistantThread(id, accessToken);
+            if (threadId === id) newChat();
+            await refreshThreads();
+          } catch (deleteError) {
+            Alert.alert('Could not delete', deleteError instanceof Error ? deleteError.message : 'Please try again.');
+          }
+        },
+      },
+    ]);
   }
 
-  async function removeConversation(id: string) {
-    if (!accessToken) return;
+  const usageText = useMemo(() => {
+    if (!usage) return null;
+    return `${usage.today.messages}/${usage.limits.dailyMessages} messages today`;
+  }, [usage]);
 
-    try {
-      await deleteAssistantConversation(id, accessToken);
-      setConversations((current) => current.filter((item) => item.id !== id));
-      if (conversationId === id) resetChat();
-    } catch (error) {
-      setHistoryError(
-        error instanceof Error ? error.message : 'Could not delete that conversation.',
-      );
-    }
-  }
-
-  function chooseCategory(category: Category) {
-    if (!picker) return;
-    updateDraft(picker.messageId, picker.draftId, {
-      categoryId: category.id,
-      categoryName: category.name,
-      type: category.type,
-      newCategoryName: '',
-    });
-    setPicker(null);
-  }
-
-  function chooseNewCategory() {
-    if (!picker) return;
-
-    const message = messages.find((item) => item.id === picker.messageId);
-    const draft = message?.drafts?.find((item) => item.id === picker.draftId);
-
-    updateDraft(picker.messageId, picker.draftId, {
-      categoryId: null,
-      categoryName: null,
-      newCategoryName: draft?.suggestedCategoryName ?? draft?.newCategoryName ?? '',
-    });
-    setPicker(null);
-  }
-
-  const pendingMessage = pendingAction
-    ? messages.find((message) => message.id === pendingAction.messageId)
-    : null;
-  const pendingDeletes =
-    pendingMessage?.operations?.filter((operation) => operation.action === 'DELETE') ?? [];
-  const pendingHasPayment = (pendingMessage?.debtPayments?.length ?? 0) > 0;
-
-  const confirmMessage = (() => {
-    const parts: string[] = [];
-    if (pendingDeletes.length > 0) {
-      parts.push(
-        pendingDeletes.length === 1
-          ? `Delete "${pendingDeletes[0]!.before.note || pendingDeletes[0]!.before.categoryName}" (${formatCurrency(pendingDeletes[0]!.before.amount)})? This cannot be undone.`
-          : `Delete ${pendingDeletes.length} transactions? This cannot be undone.`,
-      );
-    }
-    if (pendingHasPayment && pendingMessage?.debtPayments?.[0]) {
-      const payment = pendingMessage.debtPayments[0];
-      parts.push(
-        `Record ${formatCurrency(payment.amount)} for ${payment.partyName}?`,
-      );
-    }
-    return parts.join('\n\n');
-  })();
-
-  function renderDraft(message: ChatMessage, draft: Draft) {
-    const palette = TYPE_COLORS[draft.type];
-    const disabled = Boolean(message.saved) || savingMessageId === message.id;
-
+  if (isLoading) {
     return (
-      <View
-        key={draft.id}
-        style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-        <View style={styles.rowBetween}>
-          <View style={styles.row}>
-            <View
-              style={[
-                styles.badge,
-                { backgroundColor: theme.isDark ? palette.darkBg : palette.bg },
-              ]}>
-              <Text style={{ color: theme.isDark ? palette.darkText : palette.text, fontSize: 11, fontWeight: '600' }}>
-                {TYPE_LABEL[draft.type]}
-              </Text>
-            </View>
-            <Text style={{ color: theme.muted, fontSize: 11 }}>
-              {Math.round(draft.confidence * 100)}% confident
-            </Text>
-          </View>
-          <Pressable onPress={() => removeDraft(message.id, draft.id)} disabled={disabled} hitSlop={8}>
-            <Ionicons name="close" size={16} color={theme.muted} />
-          </Pressable>
-        </View>
-
-        <View style={styles.fieldRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.label, { color: theme.muted }]}>Amount</Text>
-            <TextInput
-              value={draft.amount ? String(draft.amount) : ''}
-              onChangeText={(text) =>
-                updateDraft(message.id, draft.id, { amount: Number(text) || 0 })
-              }
-              editable={!disabled}
-              keyboardType="decimal-pad"
-              placeholder="0"
-              placeholderTextColor={theme.muted}
-              style={[styles.input, { color: theme.colors.text, borderColor: theme.border }]}
-            />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.label, { color: theme.muted }]}>Category</Text>
-            <Pressable
-              onPress={() => setPicker({ messageId: message.id, draftId: draft.id })}
-              disabled={disabled}
-              style={[styles.input, styles.pickerButton, { borderColor: theme.border }]}>
-              <Text
-                numberOfLines={1}
-                style={{ color: theme.colors.text, fontSize: 14, flex: 1 }}>
-                {draft.categoryName ||
-                  (draft.newCategoryName ? `New: ${draft.newCategoryName}` : 'Choose')}
-              </Text>
-              <Ionicons name="chevron-down" size={14} color={theme.muted} />
-            </Pressable>
-          </View>
-        </View>
-
-        {draft.categoryId === null && (
-          <View style={{ marginTop: 8 }}>
-            <Text style={[styles.label, { color: theme.muted }]}>New category name</Text>
-            <TextInput
-              value={draft.newCategoryName}
-              onChangeText={(text) => updateDraft(message.id, draft.id, { newCategoryName: text })}
-              editable={!disabled}
-              placeholder={draft.suggestedCategoryName ?? 'e.g. Groceries'}
-              placeholderTextColor={theme.muted}
-              style={[styles.input, { color: theme.colors.text, borderColor: theme.border }]}
-            />
-          </View>
-        )}
-
-        <View style={{ marginTop: 8 }}>
-          <Text style={[styles.label, { color: theme.muted }]}>Note</Text>
-          <TextInput
-            value={draft.note}
-            onChangeText={(text) => updateDraft(message.id, draft.id, { note: text })}
-            editable={!disabled}
-            placeholder="Merchant or description"
-            placeholderTextColor={theme.muted}
-            style={[styles.input, { color: theme.colors.text, borderColor: theme.border }]}
-          />
-        </View>
-
-        <Text style={{ color: theme.muted, fontSize: 11, marginTop: 8 }}>
-          {formatDateTime(draft.date)} · {formatCurrency(draft.amount || 0)}
-        </Text>
+      <View style={[styles.center, { backgroundColor: theme.background }]}>
+        <ActivityIndicator color={theme.primary} />
       </View>
     );
   }
 
-  function renderOperation(message: ChatMessage, operation: AssistantOperation) {
-    const isDelete = operation.action === 'DELETE';
-    const before = operation.before;
-    const after = operation.after;
-    const applied = Boolean(message.applied);
-
-    return (
-      <View
-        key={`${operation.transactionId}-${operation.action}`}
-        style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-        <View style={styles.rowBetween}>
-          <View
-            style={[
-              styles.badge,
-              {
-                backgroundColor: isDelete
-                  ? theme.isDark
-                    ? '#7f1d1d'
-                    : '#fee2e2'
-                  : theme.isDark
-                    ? '#1e3a8a'
-                    : '#dbeafe',
-              },
-            ]}>
-            <Text
-              style={{
-                color: isDelete
-                  ? theme.isDark
-                    ? '#fca5a5'
-                    : '#b91c1c'
-                  : theme.isDark
-                    ? '#93c5fd'
-                    : '#1d4ed8',
-                fontSize: 11,
-                fontWeight: '600',
-              }}>
-              {isDelete ? 'Delete' : 'Edit'}
-            </Text>
-          </View>
-          <Text style={{ color: theme.muted, fontSize: 11 }}>
-            {Math.round(operation.confidence * 100)}% confident
-          </Text>
-        </View>
-
-        <Text style={{ color: theme.colors.text, fontSize: 13, marginTop: 8 }}>
-          {before.categoryName} · {formatCurrency(before.amount)}
-        </Text>
-        <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>
-          {formatDateTime(before.date)}
-          {before.note ? ` · ${before.note}` : ''}
-        </Text>
-
-        {after && (
-          <View
-            style={{
-              marginTop: 8,
-              paddingTop: 8,
-              borderTopWidth: StyleSheet.hairlineWidth,
-              borderTopColor: theme.border,
-            }}>
-            <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '600' }}>
-              {after.categoryName} · {formatCurrency(after.amount)}
-            </Text>
-            <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>
-              {formatDateTime(after.date)}
-              {after.note ? ` · ${after.note}` : ''}
-            </Text>
-          </View>
-        )}
-
-        {applied ? (
-          <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '600', marginTop: 10 }}>
-            Applied.
-          </Text>
-        ) : (
-          <Pressable
-            onPress={() => requestApply(message)}
-            disabled={applyingMessageId === message.id}
-            style={[
-              styles.primaryButton,
-              {
-                backgroundColor: isDelete ? theme.danger : theme.primary,
-                opacity: applyingMessageId === message.id ? 0.6 : 1,
-                marginTop: 10,
-              },
-            ]}>
-            <Text style={styles.primaryButtonText}>
-              {applyingMessageId === message.id
-                ? 'Applying…'
-                : isDelete
-                  ? 'Delete transaction'
-                  : 'Apply edit'}
-            </Text>
-          </Pressable>
-        )}
-      </View>
-    );
-  }
-
-  function renderDebtPayment(message: ChatMessage, payment: AssistantDebtPayment) {
-    const applied = Boolean(message.applied);
-
-    return (
-      <View
-        key={payment.debtId}
-        style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-        <View style={styles.rowBetween}>
-          <View style={[styles.badge, { backgroundColor: theme.isDark ? '#78350f' : '#fef3c7' }]}>
-            <Text style={{ color: theme.isDark ? '#fcd34d' : '#b45309', fontSize: 11, fontWeight: '600' }}>
-              Debt payment
-            </Text>
-          </View>
-          <Text style={{ color: theme.muted, fontSize: 11 }}>
-            {Math.round(payment.confidence * 100)}% confident
-          </Text>
-        </View>
-
-        <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '600', marginTop: 8 }}>
-          {payment.debtType === 'TAKEN' ? 'Paid to' : 'Received from'} {payment.partyName}
-        </Text>
-        <Text style={{ color: theme.colors.text, fontSize: 18, fontWeight: '700', marginTop: 4 }}>
-          {formatCurrency(payment.amount)}
-        </Text>
-        <Text style={{ color: theme.muted, fontSize: 12, marginTop: 4 }}>
-          Outstanding {formatCurrency(payment.outstandingBefore)} →{' '}
-          {formatCurrency(payment.outstandingAfter)}
-        </Text>
-        <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>
-          {formatDateTime(payment.date)}
-          {payment.note ? ` · ${payment.note}` : ''}
-        </Text>
-
-        {applied ? (
-          <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '600', marginTop: 10 }}>
-            Payment recorded.
-          </Text>
-        ) : (
-          <Pressable
-            onPress={() => requestApply(message)}
-            disabled={applyingMessageId === message.id}
-            style={[
-              styles.primaryButton,
-              {
-                backgroundColor: theme.primary,
-                opacity: applyingMessageId === message.id ? 0.6 : 1,
-                marginTop: 10,
-              },
-            ]}>
-            <Text style={styles.primaryButtonText}>
-              {applyingMessageId === message.id ? 'Recording…' : 'Record payment'}
-            </Text>
-          </Pressable>
-        )}
-      </View>
-    );
-  }
-
-  function renderQuery(result: AssistantQueryResult) {
-    const types = TYPE_ORDER.filter((type) => result.totals[type] > 0);
-
-    return (
-      <View
-        style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-        <View style={styles.rowBetween}>
-          <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '600' }}>
-            {result.periodLabel}
-          </Text>
-          <Text style={{ color: theme.muted, fontSize: 11 }}>
-            {result.count} transaction{result.count === 1 ? '' : 's'}
-          </Text>
-        </View>
-
-        {types.length > 0 && (
-          <View style={styles.totalsGrid}>
-            {types.map((type) => {
-              const palette = TYPE_COLORS[type];
-              return (
-                <View
-                  key={type}
-                  style={[
-                    styles.totalBox,
-                    {
-                      backgroundColor: theme.isDark ? palette.darkBg : palette.bg,
-                    },
-                  ]}>
-                  <Text
-                    style={{
-                      color: theme.isDark ? palette.darkText : palette.text,
-                      fontSize: 10,
-                      fontWeight: '600',
-                      textTransform: 'uppercase',
-                    }}>
-                    {TYPE_LABEL[type]}
-                  </Text>
-                  <Text
-                    style={{
-                      color: theme.isDark ? palette.darkText : palette.text,
-                      fontSize: 14,
-                      fontWeight: '700',
-                      marginTop: 2,
-                    }}>
-                    {formatCurrency(result.totals[type], 0)}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        {result.metric === 'TOTAL' &&
-          result.byCategory.map((category) => (
-            <View key={category.id} style={styles.rowBetween}>
-              <Text style={{ color: theme.muted, fontSize: 12, flex: 1 }} numberOfLines={1}>
-                {category.name}
-              </Text>
-              <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>
-                {formatCurrency(category.total, 0)}
-              </Text>
-            </View>
-          ))}
-
-        {result.metric === 'LIST' &&
-          result.transactions.map((transaction) => (
-            <View key={transaction.id} style={[styles.rowBetween, { marginTop: 6 }]}>
-              <View style={{ flex: 1 }}>
-                <Text
-                  style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}
-                  numberOfLines={1}>
-                  {transaction.note || transaction.categoryName}
-                </Text>
-                <Text style={{ color: theme.muted, fontSize: 11 }}>
-                  {formatDateTime(transaction.date)} · {transaction.categoryName}
-                </Text>
-              </View>
-              <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>
-                {formatCurrency(transaction.amount, 0)}
-              </Text>
-            </View>
-          ))}
-
-        {types.length === 0 && result.transactions.length === 0 && (
-          <Text style={{ color: theme.muted, fontSize: 12, marginTop: 6 }}>
-            No matching transactions for this period.
-          </Text>
-        )}
-
-        {(result.metric === 'TOTAL' || result.metric === 'COUNT') && result.count > 0 && (
-          <Text
-            style={{
-              color: theme.muted,
-              fontSize: 11,
-              marginTop: 10,
-              paddingTop: 8,
-              borderTopWidth: StyleSheet.hairlineWidth,
-              borderTopColor: theme.border,
-            }}>
-            Net for the period: {formatCurrency(result.net, 0)}
-          </Text>
-        )}
-      </View>
-    );
-  }
-
-  function renderMessage(message: ChatMessage) {
-    if (message.role === 'user') {
-      return (
-        <View key={message.id} style={styles.userRow}>
-          <View style={[styles.userBubble, { backgroundColor: theme.primary }]}>
-            <Text style={{ color: '#fff', fontSize: 14 }}>{message.content}</Text>
-          </View>
-        </View>
-      );
-    }
-
-    const drafts = message.drafts ?? [];
-    const operations = message.operations ?? [];
-    const debtPayments = message.debtPayments ?? [];
-    const actionCount = operations.length + debtPayments.length;
-
-    return (
-      <View key={message.id} style={{ marginBottom: 16 }}>
-        {message.content ? (
-          <View
-            style={[
-              styles.assistantBubble,
-              { backgroundColor: theme.isDark ? '#18181b' : '#f4f4f5' },
-            ]}>
-            <Text style={{ color: theme.colors.text, fontSize: 14, lineHeight: 20 }}>
-              {message.content}
-            </Text>
-          </View>
-        ) : null}
-
-        {(message.clarifications?.length ?? 0) > 0 && (
-          <View
-            style={[
-              styles.clarification,
-              {
-                backgroundColor: theme.isDark ? '#451a03' : '#fffbeb',
-                borderColor: theme.isDark ? '#78350f' : '#fde68a',
-              },
-            ]}>
-            {message.clarifications!.map((clarification) => (
-              <Text
-                key={clarification}
-                style={{ color: theme.isDark ? '#fcd34d' : '#92400e', fontSize: 12, lineHeight: 18 }}>
-                • {clarification}
-              </Text>
-            ))}
-          </View>
-        )}
-
-        {message.queryResult && <View style={{ marginTop: 8 }}>{renderQuery(message.queryResult)}</View>}
-
-        {drafts.length > 0 && (
-          <View style={{ marginTop: 8, gap: 8 }}>
-            {drafts.map((draft) => renderDraft(message, draft))}
-          </View>
-        )}
-
-        {operations.length > 0 && (
-          <View style={{ marginTop: 8, gap: 8 }}>
-            {operations.map((operation) => renderOperation(message, operation))}
-          </View>
-        )}
-
-        {debtPayments.length > 0 && (
-          <View style={{ marginTop: 8, gap: 8 }}>
-            {debtPayments.map((payment) => renderDebtPayment(message, payment))}
-          </View>
-        )}
-
-        {actionCount > 1 && !message.applied && (
-          <Pressable
-            onPress={() => requestApply(message)}
-            disabled={applyingMessageId === message.id}
-            style={[
-              styles.primaryButton,
-              {
-                backgroundColor: theme.primary,
-                marginTop: 8,
-                opacity: applyingMessageId === message.id ? 0.6 : 1,
-              },
-            ]}>
-            <Text style={styles.primaryButtonText}>
-              {applyingMessageId === message.id ? 'Applying…' : `Apply ${actionCount} changes`}
-            </Text>
-          </Pressable>
-        )}
-
-        {message.error && (
-          <View
-            style={[
-              styles.errorBox,
-              {
-                backgroundColor: theme.isDark ? '#450a0a' : '#fef2f2',
-                borderColor: theme.isDark ? '#7f1d1d' : '#fecaca',
-              },
-            ]}>
-            <Text style={{ color: theme.isDark ? '#fca5a5' : '#b91c1c', fontSize: 12 }}>
-              {message.error}
-            </Text>
-
-            {message.retryText ? (
-              <View style={styles.errorActions}>
-                <Pressable
-                  onPress={() => {
-                    const retryText = message.retryText;
-                    if (!retryText || isSending) return;
-                    setMessages((current) => current.filter((item) => item.id !== message.id));
-                    void sendText(retryText);
-                  }}
-                  disabled={isSending}
-                  style={[styles.errorButton, { borderColor: theme.danger }]}>
-                  <Text style={{ color: theme.danger, fontSize: 12, fontWeight: '600' }}>
-                    Try again
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => router.push('/transactions/new')}
-                  style={[styles.errorButton, { borderColor: theme.border }]}>
-                  <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>
-                    Add manually
-                  </Text>
-                </Pressable>
-              </View>
-            ) : null}
-          </View>
-        )}
-
-        {message.saved && (
-          <View
-            style={[
-              styles.successBox,
-              {
-                backgroundColor: theme.isDark ? '#052e16' : '#ecfdf5',
-                borderColor: theme.isDark ? '#065f46' : '#a7f3d0',
-              },
-            ]}>
-            <Ionicons name="checkmark-circle" size={16} color={theme.primary} />
-            <Text style={{ color: theme.isDark ? '#6ee7b7' : '#047857', fontSize: 12, flex: 1 }}>
-              {message.autoSaved ? 'Auto-saved' : 'Saved'}{' '}
-              {message.savedCount ?? drafts.length} transaction
-              {(message.savedCount ?? drafts.length) === 1 ? '' : 's'}.
-            </Text>
-            {undo?.messageId === message.id && (
-              <Pressable onPress={() => void handleUndo()} disabled={isUndoing} hitSlop={6}>
-                <Text
-                  style={{
-                    color: theme.isDark ? '#6ee7b7' : '#047857',
-                    fontSize: 12,
-                    fontWeight: '700',
-                    textDecorationLine: 'underline',
-                  }}>
-                  {isUndoing ? 'Undoing…' : `Undo (${undoSeconds}s)`}
-                </Text>
-              </Pressable>
-            )}
-          </View>
-        )}
-
-        {message.undone && (
-          <View
-            style={[
-              styles.infoBox,
-              { backgroundColor: theme.isDark ? '#18181b' : '#f4f4f5', borderColor: theme.border },
-            ]}>
-            <Text style={{ color: theme.muted, fontSize: 12 }}>
-              Undone — the saved transactions were removed.
-            </Text>
-          </View>
-        )}
-
-        {message.applied && actionCount === 0 && (
-          <View
-            style={[
-              styles.successBox,
-              {
-                backgroundColor: theme.isDark ? '#052e16' : '#ecfdf5',
-                borderColor: theme.isDark ? '#065f46' : '#a7f3d0',
-              },
-            ]}>
-            <Ionicons name="checkmark-circle" size={16} color={theme.primary} />
-            <Text style={{ color: theme.isDark ? '#6ee7b7' : '#047857', fontSize: 12 }}>
-              Applied {message.appliedCount ?? 0} change
-              {(message.appliedCount ?? 0) === 1 ? '' : 's'}.
-            </Text>
-          </View>
-        )}
-
-        {drafts.length > 0 && !message.saved && !message.undone && (
-          <Pressable
-            onPress={() => {
-              if (!accessToken) return;
-              void saveDrafts(message.id, drafts, conversationId, false);
-            }}
-            disabled={savingMessageId === message.id}
-            style={[
-              styles.primaryButton,
-              {
-                backgroundColor: theme.primary,
-                marginTop: 8,
-                opacity: savingMessageId === message.id ? 0.6 : 1,
-              },
-            ]}>
-            <Text style={styles.primaryButtonText}>
-              {savingMessageId === message.id
-                ? 'Saving…'
-                : `Save ${drafts.length} transaction${drafts.length === 1 ? '' : 's'}`}
-            </Text>
-          </Pressable>
-        )}
-
-        {message.undone && drafts.length > 0 && (
-          <Pressable
-            onPress={() => {
-              if (!accessToken) return;
-              void saveDrafts(message.id, drafts, conversationId, false);
-            }}
-            disabled={savingMessageId === message.id}
-            style={[
-              styles.secondaryButton,
-              { borderColor: theme.primary, marginTop: 8 },
-            ]}>
-            <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>
-              {savingMessageId === message.id ? 'Saving…' : 'Save again'}
-            </Text>
-          </Pressable>
-        )}
-      </View>
-    );
-  }
+  const hasMessages = messages.length > 0 || pendingText !== null;
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: theme.background }}
+      style={[styles.screen, { backgroundColor: theme.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
-      <View style={[styles.actionBar, { borderBottomColor: theme.border }]}>
-        <Text style={{ color: theme.muted, fontSize: 12, flex: 1 }} numberOfLines={1}>
-          {conversationId ? 'Continuing saved chat' : 'New chat'}
-        </Text>
-        <Pressable onPress={() => void openHistory()} style={styles.actionLink} hitSlop={6}>
-          <Ionicons name="time-outline" size={16} color={theme.muted} />
-          <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600' }}>Chats</Text>
+      keyboardVerticalOffset={90}>
+      <View style={[styles.topBar, { borderBottomColor: theme.border }]}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.screenTitle, { color: theme.colors.text }]}>Assistant</Text>
+          <Text style={{ color: theme.muted, fontSize: 11 }}>Nothing saves until you confirm.</Text>
+        </View>
+        <View style={styles.autoSave}>
+          <Text style={{ color: theme.muted, fontSize: 11 }}>Auto-save</Text>
+          <Switch
+            value={preferences?.autoSaveCreates ?? false}
+            onValueChange={(value) => void toggleAutoSave(value)}
+            disabled={!status?.enabled || consentRequired}
+            trackColor={{ true: theme.primary, false: theme.border }}
+          />
+        </View>
+        <Pressable
+          onPress={() => setThinkingOpen(true)}
+          hitSlop={8}
+          accessibilityLabel="Thinking settings"
+          style={{ marginLeft: 10, alignItems: 'center' }}>
+          <Ionicons
+            name={preferences?.thinkingMode ? 'bulb' : 'bulb-outline'}
+            size={21}
+            color={preferences?.thinkingMode ? '#b45309' : theme.colors.text}
+          />
+          <Text style={{ color: theme.muted, fontSize: 8 }}>
+            {preferences?.thinkingMode ? EFFORT_LABEL[preferences.reasoningEffort] : 'Think'}
+          </Text>
         </Pressable>
-        <Pressable onPress={resetChat} style={styles.actionLink} hitSlop={6}>
-          <Ionicons name="add-circle-outline" size={16} color={theme.muted} />
-          <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600' }}>New</Text>
+        <Pressable onPress={openHistory} hitSlop={8} style={{ marginLeft: 10 }}>
+          <Ionicons name="time-outline" size={22} color={theme.colors.text} />
+        </Pressable>
+        <Pressable onPress={newChat} hitSlop={8} style={{ marginLeft: 12 }}>
+          <Ionicons name="create-outline" size={22} color={theme.colors.text} />
         </Pressable>
       </View>
 
+      {!status?.enabled && (
+        <View style={styles.notice}>
+          <Text style={{ color: '#92400e', fontSize: 12 }}>
+            {status?.configured
+              ? 'The assistant is turned off by the server.'
+              : 'Add DEEPSEEK_API_KEY to the API environment to enable the assistant.'}
+          </Text>
+        </View>
+      )}
+
+      {consentRequired && (
+        <Pressable onPress={() => setConsentDismissed(false)} style={styles.consentBanner}>
+          <Text style={{ color: '#065f46', fontSize: 12, fontWeight: '600' }}>
+            Tap to read the DeepSeek privacy notice and start using the assistant.
+          </Text>
+        </Pressable>
+      )}
+
+      {error && (
+        <Text style={{ color: theme.danger, fontSize: 12, paddingHorizontal: 16, paddingTop: 8 }}>
+          {error}
+        </Text>
+      )}
+
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 24, gap: 14 }}
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
         keyboardShouldPersistTaps="handled">
-        {messages.map(renderMessage)}
-
-        {messages.length === 1 && (
-          <View style={{ marginTop: 8 }}>
-            <Text style={{ color: theme.muted, fontSize: 12, fontWeight: '600', marginBottom: 8 }}>
-              Try something like
+        {!hasMessages ? (
+          <View style={styles.welcome}>
+            <Text style={{ fontSize: 36 }}>✦</Text>
+            <Text style={[styles.welcomeTitle, { color: theme.colors.text }]}>
+              What did you spend or receive?
             </Text>
-            <View style={{ gap: 8 }}>
+            <Text style={{ color: theme.muted, fontSize: 13, textAlign: 'center' }}>
+              Type it, snap a bill, record a voice note, or import a statement.
+            </Text>
+            <View style={styles.suggestions}>
               {SUGGESTIONS.map((suggestion) => (
                 <Pressable
                   key={suggestion}
-                  onPress={() => setInput(suggestion)}
-                  style={[
-                    styles.suggestion,
-                    { borderColor: theme.border, backgroundColor: theme.card },
-                  ]}>
+                  onPress={() => void send(suggestion)}
+                  disabled={disabled}
+                  style={[styles.suggestionChip, { borderColor: theme.border }]}>
                   <Text style={{ color: theme.colors.text, fontSize: 12 }}>{suggestion}</Text>
                 </Pressable>
               ))}
             </View>
           </View>
+        ) : (
+          messages.map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              categories={categories}
+              disabled={disabled}
+              onConfirm={confirm}
+            />
+          ))
+        )}
+
+        {pendingText && (
+          <View style={styles.userRow}>
+            <View style={styles.userBubble}>
+              <Text style={{ color: '#fff', fontSize: 14 }}>{pendingText}</Text>
+            </View>
+          </View>
         )}
 
         {isSending && (
-          <View style={[styles.assistantBubble, { backgroundColor: theme.isDark ? '#18181b' : '#f4f4f5' }]}>
+          <View style={[styles.assistantBubble, { backgroundColor: theme.card, borderColor: theme.border, flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
             <ActivityIndicator size="small" color={theme.primary} />
+            <Text style={{ color: theme.muted, fontSize: 12 }}>{uploadLabel ?? 'Thinking…'}</Text>
           </View>
         )}
       </ScrollView>
 
-      <View style={[styles.footer, { borderTopColor: theme.border, backgroundColor: theme.card }]}>
-        <View style={styles.rowBetween}>
-          <Text style={{ color: theme.muted, fontSize: 11, flex: 1 }}>
-            Auto-save new transactions
-          </Text>
-          <Switch
-            value={autoSave}
-            onValueChange={(next) => void toggleAutoSave(next)}
-            disabled={!preferencesReady}
-            trackColor={{ false: theme.border, true: theme.primary }}
-          />
-        </View>
-        <Text style={{ color: theme.muted, fontSize: 10, marginBottom: 8 }}>
-          Edits, deletes, and debt payments always need confirmation. Undo is available for 10s.
+      {usageText && (
+        <Text style={{ color: theme.muted, fontSize: 10, textAlign: 'center', paddingBottom: 2 }}>
+          {usageText}
         </Text>
+      )}
 
-        {(categoriesError || preferenceError) && (
-          <Text style={{ color: theme.danger, fontSize: 11, marginBottom: 6 }}>
-            {categoriesError ?? preferenceError}
-          </Text>
-        )}
+      <View style={[styles.composer, { borderTopColor: theme.border, backgroundColor: theme.card }]}>
+        <TextInput
+          value={input}
+          onChangeText={setInput}
+          placeholder="Spent 250 on lunch today…"
+          placeholderTextColor={theme.muted}
+          multiline
+          editable={!disabled}
+          maxLength={status?.limits.maxTextChars ?? 2000}
+          style={[styles.composerInput, { color: theme.colors.text, borderColor: theme.border }]}
+        />
+        <View style={styles.composerActions}>
+          <Pressable
+            onPress={() =>
+              Alert.alert('Bill photo', 'Choose a source', [
+                { text: 'Camera', onPress: () => void pickImage('camera') },
+                { text: 'Photo library', onPress: () => void pickImage('library') },
+                { text: 'Cancel', style: 'cancel' },
+              ])
+            }
+            disabled={disabled}
+            style={styles.iconButton}>
+            <Ionicons name="camera-outline" size={22} color={disabled ? theme.muted : theme.colors.text} />
+          </Pressable>
 
-        <View style={styles.inputRow}>
-          <TextInput
-            value={input}
-            onChangeText={setInput}
-            multiline
-            maxLength={1000}
-            placeholder="Spent ₹450 on groceries yesterday…"
-            placeholderTextColor={theme.muted}
+          <Pressable
+            onPress={() => (recorderState.isRecording ? void stopRecording() : void startRecording())}
+            disabled={disabled && !recorderState.isRecording}
             style={[
-              styles.chatInput,
-              { color: theme.colors.text, borderColor: theme.border, backgroundColor: theme.background },
-            ]}
-          />
+              styles.iconButton,
+              recorderState.isRecording && { backgroundColor: '#fee2e2', borderRadius: 20 },
+            ]}>
+            <Ionicons
+              name={recorderState.isRecording ? 'stop-circle' : 'mic-outline'}
+              size={22}
+              color={recorderState.isRecording ? theme.danger : disabled ? theme.muted : theme.colors.text}
+            />
+            {recorderState.isRecording && (
+              <Text style={{ color: theme.danger, fontSize: 10, marginLeft: 4 }}>
+                {Math.floor(recorderState.durationMillis / 1000)}s
+              </Text>
+            )}
+          </Pressable>
+
+          <Pressable onPress={() => void pickStatement()} disabled={disabled} style={styles.iconButton}>
+            <Ionicons name="document-text-outline" size={22} color={disabled ? theme.muted : theme.colors.text} />
+          </Pressable>
+
           <Pressable
             onPress={() => void send()}
-            disabled={isSending || !input.trim()}
+            disabled={disabled || !input.trim()}
             style={[
               styles.sendButton,
-              { backgroundColor: theme.primary, opacity: isSending || !input.trim() ? 0.5 : 1 },
+              { backgroundColor: theme.primary, opacity: disabled || !input.trim() ? 0.5 : 1 },
             ]}>
-            <Ionicons name="send" size={18} color="#fff" />
+            <Ionicons name="arrow-up" size={20} color="#fff" />
           </Pressable>
         </View>
-        <Text style={{ color: theme.muted, fontSize: 10, marginTop: 6 }}>
-          AI can make mistakes. Review before saving.
-        </Text>
       </View>
 
-      <ConfirmDialog
-        visible={Boolean(pendingAction)}
-        title={pendingHasPayment ? 'Record payment?' : 'Delete transaction?'}
-        message={confirmMessage}
-        confirmLabel={pendingHasPayment ? 'Record' : 'Delete'}
-        onCancel={() => setPendingAction(null)}
-        onConfirm={() => {
-          if (!pendingAction) return;
-          const messageId = pendingAction.messageId;
-          setPendingAction(null);
-          void applyMessage(messageId);
-        }}
-      />
+      <Modal visible={historyOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setHistoryOpen(false)}>
+        <View style={[styles.screen, { backgroundColor: theme.background }]}>
+          <View style={[styles.header, { borderBottomColor: theme.border }]}>
+            <Text style={[styles.title, { color: theme.colors.text }]}>Conversations</Text>
+            <Pressable onPress={() => setHistoryOpen(false)} hitSlop={8}>
+              <Ionicons name="close" size={22} color={theme.colors.text} />
+            </Pressable>
+          </View>
+          <FlatList
+            data={threads}
+            keyExtractor={(item) => item.id}
+            ListEmptyComponent={
+              <Text style={{ color: theme.muted, textAlign: 'center', marginTop: 40 }}>
+                No conversations yet.
+              </Text>
+            }
+            renderItem={({ item }) => (
+              <Pressable
+                onPress={() => {
+                  void loadThread(item.id);
+                  setHistoryOpen(false);
+                }}
+                onLongPress={() => void removeThread(item.id)}
+                style={[styles.threadRow, { borderBottomColor: theme.border }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '600' }} numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                  <Text style={{ color: theme.muted, fontSize: 11 }} numberOfLines={1}>
+                    {item.preview ?? 'No messages yet'} · {item.messageCount}
+                  </Text>
+                </View>
+                {threadId === item.id && <Ionicons name="checkmark" size={18} color={theme.primary} />}
+                <Pressable onPress={() => void removeThread(item.id)} hitSlop={8} style={{ marginLeft: 12 }}>
+                  <Ionicons name="trash-outline" size={18} color={theme.muted} />
+                </Pressable>
+              </Pressable>
+            )}
+          />
+          <Pressable
+            onPress={newChat}
+            style={[styles.newChatButton, { backgroundColor: theme.primary }]}>
+            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>Start a new conversation</Text>
+          </Pressable>
+          {usageText && (
+            <Text style={{ color: theme.muted, fontSize: 10, textAlign: 'center', paddingBottom: 16 }}>
+              {usageText}
+            </Text>
+          )}
+        </View>
+      </Modal>
 
       <Modal
-        visible={Boolean(picker)}
+        visible={thinkingOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => setPicker(null)}>
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setPicker(null)} />
-          <View style={[styles.panel, { backgroundColor: theme.card, borderColor: theme.border }]}>
-            <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: '700', marginBottom: 12 }}>
-              Choose category
-            </Text>
-            <ScrollView style={{ maxHeight: 420 }}>
-              <Pressable
-                onPress={chooseNewCategory}
-                style={[styles.option, { borderColor: theme.border }]}>
-                <Ionicons name="add-circle-outline" size={18} color={theme.primary} />
-                <Text style={{ color: theme.primary, fontSize: 14, fontWeight: '600' }}>
-                  Create new category
+        onRequestClose={() => setThinkingOpen(false)}>
+        <View style={styles.consentOverlay}>
+          <View style={[styles.consentCard, { backgroundColor: theme.card }]}>
+            <Text style={[styles.title, { color: theme.colors.text }]}>Thinking</Text>
+
+            <View style={styles.settingRow}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '600' }}>
+                  Thinking mode
                 </Text>
-              </Pressable>
-
-              {TYPE_ORDER.map((type) => {
-                const matching = categories.filter((category) => category.type === type);
-                if (matching.length === 0) return null;
-
-                return (
-                  <View key={type} style={{ marginTop: 12 }}>
-                    <Text
-                      style={{
-                        color: theme.muted,
-                        fontSize: 11,
-                        fontWeight: '700',
-                        textTransform: 'uppercase',
-                      }}>
-                      {TYPE_LABEL[type]}
-                    </Text>
-                    {matching.map((category) => (
-                      <Pressable
-                        key={category.id}
-                        onPress={() => chooseCategory(category)}
-                        style={[styles.option, { borderColor: theme.border }]}>
-                        <Text style={{ color: theme.colors.text, fontSize: 14 }}>
-                          {category.name}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={historyOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setHistoryOpen(false)}>
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setHistoryOpen(false)} />
-          <View
-            style={[
-              styles.panel,
-              { backgroundColor: theme.card, borderColor: theme.border, maxHeight: '80%' },
-            ]}>
-            <View style={styles.rowBetween}>
-              <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: '700' }}>
-                Recent chats
-              </Text>
-              <Pressable onPress={() => void openHistory()} hitSlop={8}>
-                <Ionicons name="refresh" size={18} color={theme.muted} />
-              </Pressable>
-            </View>
-
-            {isLoadingHistory && (
-              <ActivityIndicator size="small" color={theme.primary} style={{ marginTop: 16 }} />
-            )}
-
-            {historyError && (
-              <Text style={{ color: theme.danger, fontSize: 12, marginTop: 12 }}>
-                {historyError}
-              </Text>
-            )}
-
-            {!isLoadingHistory && conversations.length === 0 && !historyError && (
-              <Text style={{ color: theme.muted, fontSize: 12, marginTop: 16 }}>
-                No saved conversations yet.
-              </Text>
-            )}
-
-            <ScrollView style={{ marginTop: 12 }}>
-              {conversations.map((conversation) => (
-                <View
-                  key={conversation.id}
-                  style={[styles.historyRow, { borderColor: theme.border }]}>
-                  <Pressable
-                    onPress={() => void loadConversation(conversation.id)}
-                    style={{ flex: 1 }}>
-                    <Text
-                      style={{ color: theme.colors.text, fontSize: 14, fontWeight: '600' }}
-                      numberOfLines={1}>
-                      {conversation.title}
-                    </Text>
-                    {conversation.preview && (
-                      <Text
-                        style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}
-                        numberOfLines={2}>
-                        {conversation.preview}
-                      </Text>
-                    )}
-                    <Text style={{ color: theme.muted, fontSize: 10, marginTop: 4 }}>
-                      {formatRelative(conversation.lastMessageAt)}
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => void removeConversation(conversation.id)}
-                    hitSlop={8}
-                    style={{ paddingLeft: 12 }}>
-                    <Ionicons name="trash-outline" size={18} color={theme.muted} />
-                  </Pressable>
-                </View>
-              ))}
-            </ScrollView>
-
-            {usage && (
-              <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.border }}>
-                <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>
-                  Usage this month
-                </Text>
-                <Text style={{ color: theme.muted, fontSize: 11, marginTop: 2 }}>
-                  {usage.month.messages} messages · {usage.month.totalTokens.toLocaleString()} tokens ·{' '}
-                  {usage.month.averageLatencyMs} ms average
+                <Text style={{ color: theme.muted, fontSize: 11, marginTop: 2, lineHeight: 16 }}>
+                  Let the model reason before it answers. Slower and uses more tokens.
                 </Text>
               </View>
-            )}
+              <Switch
+                value={preferences?.thinkingMode ?? false}
+                onValueChange={(value) => void savePreferences({ thinkingMode: value })}
+                disabled={!status?.enabled || consentRequired}
+                trackColor={{ true: '#d97706', false: theme.border }}
+              />
+            </View>
+
+            <Text style={{ color: theme.muted, fontSize: 11, marginTop: 16, marginBottom: 6 }}>
+              Effort
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {(['low', 'high', 'max'] as const).map((level) => {
+                const selected = preferences?.reasoningEffort === level;
+                return (
+                  <Pressable
+                    key={level}
+                    onPress={() => void savePreferences({ reasoningEffort: level })}
+                    disabled={!preferences?.thinkingMode}
+                    style={[
+                      styles.effortChip,
+                      {
+                        borderColor: selected ? theme.primary : theme.border,
+                        backgroundColor: selected ? `${theme.primary}15` : 'transparent',
+                        opacity: preferences?.thinkingMode ? 1 : 0.4,
+                      },
+                    ]}>
+                    <Text
+                      style={{
+                        color: selected ? theme.primary : theme.muted,
+                        fontSize: 12,
+                        fontWeight: '600',
+                      }}>
+                      {EFFORT_LABEL[level]}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={{ color: theme.muted, fontSize: 11, lineHeight: 16, marginTop: 14 }}>
+              Applies to chat and bill analysis. Statements always use fast extraction. The
+              reasoning is saved with each reply; tap “Show thinking” on an answer to read it.
+            </Text>
+
+            <Pressable
+              onPress={() => setThinkingOpen(false)}
+              style={[styles.consentButton, { backgroundColor: theme.primary, marginTop: 18 }]}>
+              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>Done</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
+
+      <Modal visible={consentRequired && !consentDismissed} animationType="fade" transparent onRequestClose={() => setConsentDismissed(true)}>
+        <View style={styles.consentOverlay}>
+          <View style={[styles.consentCard, { backgroundColor: theme.card }]}>
+            <Text style={[styles.title, { color: theme.colors.text }]}>Before you use the assistant</Text>
+            <Text style={{ color: theme.muted, fontSize: 13, lineHeight: 19, marginTop: 10 }}>
+              Messages, bill photos, voice notes and statement pages are sent to DeepSeek for
+              processing. Money Tracker 365 does not store the original files; only the transactions
+              you confirm are saved. DeepSeek’s privacy policy governs its handling of requests.
+            </Text>
+            <Pressable
+              onPress={() => void acceptConsent()}
+              style={[styles.consentButton, { backgroundColor: theme.primary }]}>
+              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>I understand</Text>
+            </Pressable>
+            <Pressable onPress={() => setConsentDismissed(true)} style={{ alignItems: 'center', paddingVertical: 8 }}>
+              <Text style={{ color: theme.muted, fontSize: 12 }}>Not now</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <StatementReviewModal
+        visible={statementOpen}
+        initialImport={statementImport}
+        categories={categories}
+        accessToken={accessToken ?? ''}
+        onClose={() => setStatementOpen(false)}
+        onCommitted={(result) => {
+          Alert.alert('Imported', `${result.imported} transactions imported.`, [
+            { text: 'OK' },
+            { text: 'Undo', onPress: () => void undo(result.batchId) },
+          ]);
+          if (threadId) void reload(threadId);
+          setStatementOpen(false);
+        }}
+      />
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  actionBar: {
+  screen: { flex: 1 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
   },
-  actionLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
+  screenTitle: { fontSize: 19, fontWeight: '800' },
+  autoSave: { alignItems: 'center', gap: 1 },
+  notice: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+    borderWidth: 1,
+    margin: 12,
+    borderRadius: 10,
+    padding: 10,
   },
-  userRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginBottom: 16,
+  consentBanner: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#a7f3d0',
+    borderWidth: 1,
+    margin: 12,
+    borderRadius: 10,
+    padding: 10,
   },
+  welcome: { alignItems: 'center', paddingTop: 32, gap: 10 },
+  welcomeTitle: { fontSize: 18, fontWeight: '700' },
+  suggestions: { gap: 8, marginTop: 8, width: '100%' },
+  suggestionChip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  userRow: { alignItems: 'flex-end' },
   userBubble: {
-    maxWidth: '85%',
-    borderRadius: 18,
-    borderBottomRightRadius: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  assistantBubble: {
-    alignSelf: 'flex-start',
-    maxWidth: '95%',
-    borderRadius: 18,
-    borderBottomLeftRadius: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  clarification: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 2,
-  },
-  card: {
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 12,
-  },
-  rowBetween: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  badge: {
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  fieldRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-  },
-  label: {
-    fontSize: 10,
-    fontWeight: '600',
-    marginBottom: 4,
-    textTransform: 'uppercase',
-  },
-  input: {
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 14,
-  },
-  pickerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    minHeight: 38,
-  },
-  primaryButton: {
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  secondaryButton: {
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  errorBox: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  errorActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-  },
-  errorButton: {
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  successBox: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  infoBox: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  totalsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 10,
-  },
-  totalBox: {
-    flexGrow: 1,
-    minWidth: '45%',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  suggestion: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  footer: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 12,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-  },
-  chatInput: {
-    flex: 1,
-    minHeight: 42,
-    maxHeight: 120,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-  },
-  sendButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  panel: {
-    width: '100%',
-    maxWidth: 480,
-    alignSelf: 'center',
+    backgroundColor: '#047857',
     borderRadius: 16,
+    borderBottomRightRadius: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    maxWidth: '85%',
+  },
+  assistantRow: { alignItems: 'flex-start' },
+  assistantBubble: { borderWidth: 1, borderRadius: 16, borderBottomLeftRadius: 4, paddingHorizontal: 12, paddingVertical: 9 },
+  clarification: { backgroundColor: '#fef3c7', borderRadius: 8, padding: 7 },
+  operationCard: { borderWidth: 1, borderRadius: 12, padding: 10, gap: 4 },
+  operationActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 6 },
+  operationButton: { borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
+  queryCard: { borderWidth: 1, borderRadius: 12, padding: 12, gap: 3 },
+  groupRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
+  composer: { borderTopWidth: 1, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 },
+  composerInput: {
     borderWidth: 1,
-    padding: 16,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 14,
+    maxHeight: 120,
+    minHeight: 42,
   },
-  option: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  historyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
+  composerActions: { flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 6 },
+  iconButton: { flexDirection: 'row', alignItems: 'center', padding: 7 },
+  sendButton: { marginLeft: 'auto', width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1 },
+  title: { fontSize: 18, fontWeight: '700' },
+  threadRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
+  newChatButton: { margin: 16, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  consentOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
+  consentCard: { borderRadius: 18, padding: 20 },
+  consentButton: { marginTop: 16, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginBottom: 10 },
+  reasoningBox: { borderWidth: 1, borderRadius: 10, overflow: 'hidden' },
+  reasoningHeader: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 8 },
+  settingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 16 },
+  effortChip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6 },
 });

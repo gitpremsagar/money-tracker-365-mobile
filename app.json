@@ -42,7 +42,22 @@
           }
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Money Tracker 365 to record a voice note for your transactions."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Money Tracker 365 to choose a bill photo.",
+          "cameraPermission": "Allow Money Tracker 365 to photograph a bill."
+        }
+      ],
+      "expo-document-picker",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
