@@ -35,10 +35,10 @@ export default function TabLayout() {
       <Tabs.Screen
         name="assistant"
         options={{
+          // The assistant API is not implemented yet. Keep the screen in the
+          // codebase but hide it from the tab bar until the backend ships.
+          href: null,
           title: 'Assistant',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubbles-outline" size={size} color={color} />
-          ),
         }}
       />
       <Tabs.Screen

@@ -1,12 +1,22 @@
 import EmptyState from '@/components/EmptyState';
 import { DebtsCard, MoneyFlowCard, NetBalanceBanner, TopExpensesCard } from '@/components/MoneyFlow';
 import { useThemeColors } from '@/hooks/use-theme-colors';
-import { getMonthlyReport, listDebts, listTransactions, type Debt, type MonthlyReport, type Transaction } from '@/lib/api';
+import {
+  getMonthlyReport,
+  listBudgets,
+  listDebts,
+  listTransactions,
+  type BudgetsResult,
+  type Debt,
+  type MonthlyReport,
+  type Transaction,
+} from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import {
   TYPE_COLORS,
   currentMonth,
   formatAmount,
+  formatCurrency,
   formatDate,
   monthLabel,
   typeIcon,
@@ -31,7 +41,9 @@ export default function DashboardScreen() {
   const [report, setReport] = useState<MonthlyReport | null>(null);
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
   const [activeDebts, setActiveDebts] = useState<Debt[]>([]);
+  const [budgets, setBudgets] = useState<BudgetsResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const month = currentMonth();
   const monthLabelText = monthLabel(month);
@@ -51,20 +63,27 @@ export default function DashboardScreen() {
   const loadDashboard = useCallback(async () => {
     if (!accessToken) return;
     setIsLoading(true);
-    try {
-      const [rep, txResult, debtResult] = await Promise.all([
-        getMonthlyReport(month, accessToken),
-        listTransactions({ month, page: 1, limit: 5 }, accessToken),
-        listDebts({ status: 'ACTIVE', limit: 100 }, accessToken),
-      ]);
-      setReport(rep);
-      setRecentTransactions(txResult.transactions);
-      setActiveDebts(debtResult.debts);
-    } catch {
-      // show empty state
-    } finally {
-      setIsLoading(false);
+    setLoadError(null);
+
+    const results = await Promise.allSettled([
+      getMonthlyReport(month, accessToken),
+      listTransactions({ page: 1, limit: 5 }, accessToken),
+      listDebts({ status: 'ACTIVE', limit: 100 }, accessToken),
+      listBudgets(month, accessToken),
+    ]);
+
+    const [reportResult, txResult, debtResult, budgetResult] = results;
+
+    if (reportResult.status === 'fulfilled') setReport(reportResult.value);
+    if (txResult.status === 'fulfilled') setRecentTransactions(txResult.value.transactions);
+    if (debtResult.status === 'fulfilled') setActiveDebts(debtResult.value.debts);
+    if (budgetResult.status === 'fulfilled') setBudgets(budgetResult.value);
+
+    if (results.some((result) => result.status === 'rejected')) {
+      setLoadError('Some data could not load. Pull to refresh or try again.');
     }
+
+    setIsLoading(false);
   }, [accessToken, month]);
 
   useFocusEffect(
@@ -96,13 +115,30 @@ export default function DashboardScreen() {
             <Text style={{ color: theme.muted, fontWeight: '600', fontSize: 14 }}>Log out</Text>
           </Pressable>
         </View>
-        <Pressable
-          onPress={() => router.push('/(app)/transactions/new')}
-          style={[styles.addButton, { backgroundColor: theme.primary }]}>
-          <Ionicons name="add" size={20} color="#fff" />
-          <Text style={styles.addText}>Add</Text>
-        </Pressable>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Pressable
+            onPress={() => router.push('/(app)/settings' as Href)}
+            style={[styles.iconButton, { borderColor: theme.border, backgroundColor: theme.card }]}
+            accessibilityLabel="Settings">
+            <Ionicons name="settings-outline" size={19} color={theme.muted} />
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/(app)/transactions/new')}
+            style={[styles.addButton, { backgroundColor: theme.primary }]}>
+            <Ionicons name="add" size={20} color="#fff" />
+            <Text style={styles.addText}>Add</Text>
+          </Pressable>
+        </View>
       </View>
+
+      {loadError ? (
+        <View style={[styles.errorBanner, { borderColor: theme.danger }]}>
+          <Text style={{ color: theme.danger, fontSize: 12, flex: 1 }}>{loadError}</Text>
+          <Pressable onPress={() => void loadDashboard()}>
+            <Text style={{ color: theme.danger, fontWeight: '700', fontSize: 12 }}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {isLoading ? (
         <ActivityIndicator color={theme.primary} style={{ marginVertical: 32 }} />
@@ -115,8 +151,63 @@ export default function DashboardScreen() {
             saving={report.totalSaving}
             investment={report.totalInvestment}
             debtRepayment={report.totalDebtRepayment}
+            debtRecovery={report.totalDebtRecovery}
           />
           <TopExpensesCard items={topExpenses} totalExpense={report.totalExpense} />
+          {budgets?.summary.totalBudget != null ? (
+            <View style={[styles.budgetCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View>
+                  <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
+                    Monthly budget
+                  </Text>
+                  <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>
+                    {formatCurrency(budgets.summary.totalSpent)} of{' '}
+                    {formatCurrency(budgets.summary.totalBudget)}
+                  </Text>
+                </View>
+                <Pressable onPress={() => router.push('/(app)/budgets' as Href)}>
+                  <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '600' }}>Manage</Text>
+                </Pressable>
+              </View>
+              <Text
+                style={{
+                  color: budgets.summary.overBudget ? theme.danger : theme.colors.text,
+                  fontSize: 22,
+                  fontWeight: '700',
+                  marginTop: 8,
+                }}>
+                {budgets.summary.overBudget
+                  ? `${formatCurrency(Math.abs(budgets.summary.remaining ?? 0))} over`
+                  : `${formatCurrency(budgets.summary.remaining ?? 0)} left`}
+              </Text>
+              <View style={[styles.budgetTrack, { backgroundColor: theme.isDark ? '#27272a' : '#f4f4f5' }]}>
+                <View
+                  style={{
+                    width: `${Math.min(100, Math.max(0, budgets.summary.percentage ?? 0))}%`,
+                    height: '100%',
+                    borderRadius: 999,
+                    backgroundColor: budgets.summary.overBudget
+                      ? theme.danger
+                      : (budgets.summary.percentage ?? 0) >= 80
+                        ? '#f59e0b'
+                        : theme.primary,
+                  }}
+                />
+              </View>
+            </View>
+          ) : (
+            <Pressable
+              onPress={() => router.push('/(app)/budgets' as Href)}
+              style={[styles.budgetCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
+                Set a monthly budget
+              </Text>
+              <Text style={{ color: theme.muted, fontSize: 12, marginTop: 2 }}>
+                A limit makes the report actionable.
+              </Text>
+            </Pressable>
+          )}
           <DebtsCard taken={debtTaken} given={debtGiven} />
         </View>
       ) : null}
@@ -130,7 +221,7 @@ export default function DashboardScreen() {
 
       {isLoading ? null : recentTransactions.length === 0 ? (
         <EmptyState
-          message="No transactions this month."
+          message="No transactions yet."
           actionLabel="Add one"
           onAction={() => router.push('/(app)/transactions/new')}
         />
@@ -167,6 +258,7 @@ export default function DashboardScreen() {
         {(
           [
             { label: 'Add Transaction', route: '/(app)/transactions/new' as Href, icon: 'add-circle-outline' as const },
+            { label: 'Budgets', route: '/(app)/budgets' as Href, icon: 'speedometer-outline' as const },
             { label: 'Add Debt', route: '/(app)/debts/new' as Href, icon: 'card-outline' as const },
             { label: 'Categories', route: '/(app)/(tabs)/categories' as Href, icon: 'pricetags-outline' as const },
             { label: 'Monthly Report', route: { pathname: '/(app)/(tabs)/reports', params: { view: 'monthly' } } as Href, icon: 'bar-chart-outline' as const },
@@ -196,6 +288,25 @@ const styles = StyleSheet.create({
   accountEmail: { fontSize: 12, marginTop: 2 },
   subtitle: { fontSize: 14, marginTop: 4 },
   logoutButton: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, alignSelf: 'flex-start' },
+  iconButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorBanner: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  budgetCard: { borderWidth: 1, borderRadius: 14, padding: 16 },
+  budgetTrack: { height: 8, borderRadius: 999, overflow: 'hidden', marginTop: 10 },
   addButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   addText: { color: '#fff', fontWeight: '600', fontSize: 14 },
   summaryStack: { gap: 12, marginBottom: 24 },

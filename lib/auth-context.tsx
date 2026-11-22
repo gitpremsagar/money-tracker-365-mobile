@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  getCurrentUser,
   loginRequest,
   logoutRequest,
   refreshSession,
@@ -15,6 +16,7 @@ import {
   signupRequest,
   type AuthUser,
 } from './api';
+import * as tokenStore from './token-store';
 
 type AuthContextValue = {
   user: AuthUser | null;
@@ -23,6 +25,7 @@ type AuthContextValue = {
   login: (input: { email: string; password: string }) => Promise<void>;
   signup: (input: { name: string; email: string; password: string }) => Promise<void>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -89,9 +92,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    await logoutRequest(accessToken);
-    setAccessToken(null);
-    setUser(null);
+    try {
+      await logoutRequest(accessToken);
+    } catch {
+      // Local tokens are cleared below even if the API is unreachable.
+    } finally {
+      await tokenStore.clearTokens().catch(() => {});
+      setAccessToken(null);
+      setUser(null);
+    }
+  }, [accessToken]);
+
+  const refreshUser = useCallback(async () => {
+    if (!accessToken) return;
+    const result = await getCurrentUser(accessToken);
+    setUser(result.user);
   }, [accessToken]);
 
   const value = useMemo(
@@ -102,8 +117,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       signup,
       logout,
+      refreshUser,
     }),
-    [user, accessToken, isLoading, login, signup, logout],
+    [user, accessToken, isLoading, login, signup, logout, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

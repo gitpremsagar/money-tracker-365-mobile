@@ -29,6 +29,7 @@ export type PeriodTotals = {
   totalSaving: number;
   totalInvestment: number;
   totalDebtRepayment: number;
+  totalDebtRecovery: number;
   netBalance: number;
 };
 
@@ -40,6 +41,7 @@ export type TrendBucket = {
   saving: number;
   investment: number;
   debtRepayment: number;
+  debtRecovery: number;
 };
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -50,11 +52,12 @@ export function daysInMonth(month: string) {
 }
 
 export function fillDailyBuckets(month: string, dailyTotals: DailyTotalItem[]): TrendBucket[] {
-  const [, mon] = month.split('-').map(Number);
-  const byDay = new Map(dailyTotals.map((d) => [parseInt(d.date.slice(8, 10), 10), d]));
+  const [year, mon] = month.split('-').map(Number);
+  const byDay = new Map(dailyTotals.map((d) => [d.date, d]));
   return Array.from({ length: daysInMonth(month) }, (_, i) => {
     const day = i + 1;
-    const d = byDay.get(day);
+    const key = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const d = byDay.get(key);
     return {
       label: String(day),
       fullLabel: `${day} ${MONTH_SHORT[mon! - 1]}`,
@@ -63,6 +66,7 @@ export function fillDailyBuckets(month: string, dailyTotals: DailyTotalItem[]): 
       saving: d?.saving ?? 0,
       investment: d?.investment ?? 0,
       debtRepayment: d?.debtRepayment ?? 0,
+      debtRecovery: d?.debtRecovery ?? 0,
     };
   });
 }
@@ -79,12 +83,17 @@ export function fillMonthlyBuckets(year: number, monthlyTotals: MonthlyTotalItem
       saving: m?.saving ?? 0,
       investment: m?.investment ?? 0,
       debtRepayment: m?.debtRepayment ?? 0,
+      debtRecovery: m?.debtRecovery ?? 0,
     };
   });
 }
 
 function outflowOf(b: TrendBucket) {
   return b.expense + b.saving + b.investment + b.debtRepayment;
+}
+
+function inflowOf(b: TrendBucket) {
+  return b.income + b.debtRecovery;
 }
 
 type ChangeSense = 'higherIsGood' | 'higherIsBad' | 'neutral';
@@ -111,6 +120,7 @@ export function PeriodComparisonCard({
     { label: 'Savings', key: 'totalSaving', sense: 'neutral' },
     { label: 'Investments', key: 'totalInvestment', sense: 'neutral' },
     { label: 'Debt repayment', key: 'totalDebtRepayment', sense: 'neutral' },
+    { label: 'Debt received', key: 'totalDebtRecovery', sense: 'higherIsGood' },
     { label: 'Net balance', key: 'netBalance', sense: 'higherIsGood', signed: true },
   ];
 
@@ -125,6 +135,7 @@ export function PeriodComparisonCard({
         const prev = previous ? previous[row.key] : null;
         const change = prev == null ? null : cur - prev;
         const pct = prev == null || prev === 0 || change == null ? null : (change / Math.abs(prev)) * 100;
+        const showPct = pct != null && Math.abs(prev ?? 0) >= 1000 && Math.abs(pct) <= 999;
         return (
           <View key={row.key} style={[styles.compareRow, { borderTopColor: theme.border }]}>
             <Text style={{ color: theme.colors.text, fontSize: 13, flex: 1 }}>{row.label}</Text>
@@ -150,7 +161,13 @@ export function PeriodComparisonCard({
                   ? '—'
                   : change === 0
                     ? 'No change'
-                    : `${change > 0 ? '▲' : '▼'} ${formatCurrency(change)}${pct != null ? ` (${Math.abs(pct).toFixed(0)}%)` : ''}`}
+                    : `${change > 0 ? '▲' : '▼'} ${formatCurrency(change)}${
+                        showPct
+                          ? ` (${Math.abs(pct).toFixed(0)}%)`
+                          : prev === 0 && change > 0
+                            ? ' (new)'
+                            : ''
+                      }`}
               </Text>
             </View>
           </View>
@@ -206,7 +223,8 @@ export function InsightsCard({
 }) {
   const theme = useThemeColors();
   const { totalIncome: income, totalExpense: expense } = totals;
-  const savingsRate = income > 0 ? ((income - expense) / income) * 100 : null;
+  const savingsRate =
+    income > 0 ? ((totals.totalSaving + totals.totalInvestment) / income) * 100 : null;
   const expenseRatio = income > 0 ? (expense / income) * 100 : null;
   const unit = mode === 'month' ? 'day' : 'month';
 
@@ -219,9 +237,9 @@ export function InsightsCard({
     null,
   );
 
-  const activeBuckets = buckets.filter((b) => b.income + outflowOf(b) > 0);
+  const activeBuckets = buckets.filter((b) => inflowOf(b) + outflowOf(b) > 0);
   const spendDays = buckets.slice(0, elapsed).filter((b) => b.expense > 0).length;
-  const deficitMonths = activeBuckets.filter((b) => b.income - outflowOf(b) < 0).length;
+  const deficitMonths = activeBuckets.filter((b) => inflowOf(b) - outflowOf(b) < 0).length;
   const avgDivisor = mode === 'year' ? activeBuckets.length : elapsed;
   const avgSpend = avgDivisor > 0 ? expense / avgDivisor : 0;
 
@@ -233,7 +251,7 @@ export function InsightsCard({
         <InsightTile
           label="Savings rate"
           value={savingsRate == null ? '—' : `${savingsRate.toFixed(0)}%`}
-          detail="Income left after expenses"
+          detail="Income set aside for savings & investments"
           valueColor={savingsRate == null ? undefined : signedColor(savingsRate, theme.isDark)}
         />
         <InsightTile
@@ -298,6 +316,7 @@ export function InsightsCard({
 
 const LEGEND = [
   { label: 'Income', color: '#10b981' },
+  { label: 'Debt received', color: '#14b8a6' },
   { label: 'Expense', color: '#f87171' },
   { label: 'Saving', color: '#3b82f6' },
   { label: 'Investment', color: '#a855f7' },
@@ -315,6 +334,7 @@ export function TrendChart({
   const chartWidth = Dimensions.get('window').width - 64;
   const data = buckets.flatMap((row) => [
     { value: row.income, label: row.label, frontColor: '#10b981', spacing: 1 },
+    { value: row.debtRecovery, frontColor: '#14b8a6', spacing: 1 },
     { value: row.expense, frontColor: '#f87171', spacing: 1 },
     { value: row.saving, frontColor: '#3b82f6', spacing: 1 },
     { value: row.investment, frontColor: '#a855f7', spacing: 1 },
@@ -366,7 +386,10 @@ export function TrendChart({
 
 export function MonthlyBreakdownTable({ buckets }: { buckets: TrendBucket[] }) {
   const theme = useThemeColors();
-  const maxAbsNet = Math.max(...buckets.map((b) => Math.abs(b.income - outflowOf(b))), 0);
+  const maxAbsNet = Math.max(
+    ...buckets.map((b) => Math.abs(inflowOf(b) - outflowOf(b))),
+    0,
+  );
 
   return (
     <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
@@ -376,8 +399,8 @@ export function MonthlyBreakdownTable({ buckets }: { buckets: TrendBucket[] }) {
       </Text>
       {buckets.map((b) => {
         const outflow = outflowOf(b);
-        const net = b.income - outflow;
-        const isEmpty = b.income + outflow === 0;
+        const net = inflowOf(b) - outflow;
+        const isEmpty = inflowOf(b) + outflow === 0;
         const rate = b.income > 0 ? ((b.income - b.expense) / b.income) * 100 : null;
         const barWidth = maxAbsNet > 0 ? Math.min(100, (Math.abs(net) / maxAbsNet) * 100) : 0;
         return (
@@ -391,7 +414,9 @@ export function MonthlyBreakdownTable({ buckets }: { buckets: TrendBucket[] }) {
               </Text>
             </View>
             <Text style={{ color: theme.muted, fontSize: 12 }}>
-              In {formatCurrency(b.income)} · Out {formatCurrency(outflow)}
+              In {formatCurrency(b.income)}
+              {b.debtRecovery > 0 ? ` + ${formatCurrency(b.debtRecovery)} debt` : ''} · Out{' '}
+              {formatCurrency(outflow)}
               {rate != null ? ` · Save ${rate.toFixed(0)}%` : ''}
             </Text>
             {!isEmpty ? (

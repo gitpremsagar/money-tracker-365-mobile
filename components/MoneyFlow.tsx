@@ -98,6 +98,7 @@ export function MoneyFlowCard({
   saving,
   investment,
   debtRepayment,
+  debtRecovery = 0,
   subtitle = "How this month's income was used",
 }: {
   income: number;
@@ -105,15 +106,20 @@ export function MoneyFlowCard({
   saving: number;
   investment: number;
   debtRepayment: number;
+  debtRecovery?: number;
   subtitle?: string;
 }) {
   const theme = useThemeColors();
+  const inflow = income + debtRecovery;
   const outflow = expense + saving + investment + debtRepayment;
-  const scale = Math.max(income, outflow);
-  const overspent = outflow - income;
+  const scale = Math.max(inflow, outflow);
+  const overspent = outflow - inflow;
 
   const legend = [
     { label: 'Income', value: income, color: '#10b981', pct: null as string | null },
+    ...(debtRecovery > 0
+      ? [{ label: 'Debt received', value: debtRecovery, color: '#14b8a6', pct: null as string | null }]
+      : []),
     { label: 'Expense', value: expense, color: '#ef4444', pct: percentOf(expense, income) },
     { label: 'Savings', value: saving, color: '#3b82f6', pct: percentOf(saving, income) },
     { label: 'Investments', value: investment, color: '#a855f7', pct: percentOf(investment, income) },
@@ -133,13 +139,16 @@ export function MoneyFlowCard({
       <View style={{ gap: 16 }}>
         <View>
           <View style={styles.barLabelRow}>
-            <Text style={{ color: theme.colors.text, fontWeight: '500', fontSize: 13 }}>Income</Text>
+            <Text style={{ color: theme.colors.text, fontWeight: '500', fontSize: 13 }}>
+              Money in{debtRecovery > 0 ? ' (incl. debt received)' : ''}
+            </Text>
             <Text style={{ color: signedColor(1, theme.isDark), fontWeight: '600' }}>
-              {formatCurrency(income)}
+              {formatCurrency(inflow)}
             </Text>
           </View>
           <View style={[styles.barTrack, { backgroundColor: theme.isDark ? '#27272a' : '#f4f4f5' }]}>
             <Bar value={income} scale={scale} color="#10b981" />
+            <Bar value={debtRecovery} scale={scale} color="#14b8a6" />
             {overspent > 0 ? <Bar value={overspent} scale={scale} color="rgba(239,68,68,0.35)" /> : null}
           </View>
           {overspent > 0 ? (

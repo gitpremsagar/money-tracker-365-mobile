@@ -103,6 +103,7 @@ export async function apiFetch<T>(path: string, init: ApiRequestInit = {}): Prom
   const { accessToken, skipAuthRetry, headers, ...rest } = init;
 
   const requestHeaders = new Headers(headers);
+  requestHeaders.set('X-Client', 'mobile');
 
   const token = accessToken ?? accessTokenGetter?.() ?? null;
 
@@ -195,7 +196,7 @@ export async function refreshSession(): Promise<AuthResponse | null> {
 
   const response = await fetch(`${API_URL}/auth/refresh`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Client': 'mobile' },
     body: JSON.stringify({ refreshToken }),
   });
 
@@ -210,6 +211,49 @@ export async function refreshSession(): Promise<AuthResponse | null> {
   }
   await tokenStore.setTokens(data.accessToken, data.refreshToken);
   return data;
+}
+
+export async function forgotPasswordRequest(email: string): Promise<{
+  message: string;
+  delivered: boolean;
+  devResetUrl?: string;
+}> {
+  return apiFetch('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+    skipAuthRetry: true,
+  });
+}
+
+export async function updateProfileRequest(input: {
+  name?: string;
+  email?: string;
+}): Promise<{ user: AuthUser }> {
+  return apiFetch('/auth/me', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function changePasswordRequest(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<{ message: string }> {
+  return apiFetch('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function logoutAllRequest(): Promise<{ message: string }> {
+  return apiFetch('/auth/logout-all', { method: 'POST' });
+}
+
+export async function deleteAccountRequest(password: string): Promise<{ message: string }> {
+  return apiFetch('/auth/me', {
+    method: 'DELETE',
+    body: JSON.stringify({ password }),
+  });
 }
 
 export type CategoryType = 'INCOME' | 'EXPENSE' | 'SAVING' | 'INVESTMENT';
@@ -264,6 +308,15 @@ export async function updateCategory(
 export async function deleteCategory(id: string, accessToken: string): Promise<void> {
   await apiFetch<{ message: string }>(`/categories/${id}`, {
     method: 'DELETE',
+    accessToken,
+  });
+}
+
+export async function addStarterCategories(
+  accessToken: string,
+): Promise<{ created: number }> {
+  return apiFetch('/categories/starter', {
+    method: 'POST',
     accessToken,
   });
 }
@@ -511,7 +564,6 @@ export async function updateDebt(
     amount?: number;
     description?: string | null;
     date?: string;
-    status?: DebtStatus;
   },
   accessToken: string,
 ): Promise<Debt> {
@@ -569,6 +621,61 @@ export async function deleteDebtPayment(
   return res.debt;
 }
 
+export type BudgetItem = {
+  id: string;
+  month: string;
+  scope: string;
+  amount: number;
+  spent: number;
+  remaining: number;
+  percentage: number;
+  overBudget: boolean;
+  categoryId: string | null;
+  categoryName: string;
+};
+
+export type BudgetSummary = {
+  totalBudget: number | null;
+  totalSpent: number;
+  remaining: number | null;
+  percentage: number | null;
+  overBudget: boolean;
+};
+
+export type BudgetsResult = {
+  month: string;
+  budgets: BudgetItem[];
+  summary: BudgetSummary;
+};
+
+export async function listBudgets(
+  month: string,
+  accessToken: string,
+): Promise<BudgetsResult> {
+  return apiFetch<BudgetsResult>(`/budgets?month=${month}`, {
+    method: 'GET',
+    accessToken,
+  });
+}
+
+export async function upsertBudget(
+  input: { month: string; scope: string; amount: number },
+  accessToken: string,
+): Promise<{ budget: { id: string } }> {
+  return apiFetch<{ budget: { id: string } }>('/budgets', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    accessToken,
+  });
+}
+
+export async function deleteBudget(id: string, accessToken: string): Promise<void> {
+  await apiFetch<{ message: string }>(`/budgets/${id}`, {
+    method: 'DELETE',
+    accessToken,
+  });
+}
+
 export type CategoryBreakdownItem = {
   id: string;
   name: string;
@@ -595,6 +702,7 @@ export type DailyTotalItem = {
   saving: number;
   investment: number;
   debtRepayment: number;
+  debtRecovery: number;
 };
 
 export type MonthlyReport = {
@@ -604,6 +712,7 @@ export type MonthlyReport = {
   totalSaving: number;
   totalInvestment: number;
   totalDebtRepayment: number;
+  totalDebtRecovery: number;
   netBalance: number;
   categoryBreakdown: CategoryBreakdownItem[];
   groupBreakdown: GroupBreakdownItem[];
@@ -625,6 +734,7 @@ export type MonthlyTotalItem = {
   saving: number;
   investment: number;
   debtRepayment: number;
+  debtRecovery: number;
 };
 
 export type AnnualReport = {
@@ -634,6 +744,7 @@ export type AnnualReport = {
   totalSaving: number;
   totalInvestment: number;
   totalDebtRepayment: number;
+  totalDebtRecovery: number;
   netBalance: number;
   categoryBreakdown: CategoryBreakdownItem[];
   groupBreakdown: GroupBreakdownItem[];

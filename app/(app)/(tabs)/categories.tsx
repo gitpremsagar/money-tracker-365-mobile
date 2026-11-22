@@ -3,6 +3,7 @@ import EmptyState from '@/components/EmptyState';
 import TypeBadge from '@/components/TypeBadge';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import {
+  addStarterCategories,
   createCategory,
   createCategoryGroup,
   deleteCategory,
@@ -48,6 +49,7 @@ export default function CategoriesScreen() {
   const [newName, setNewName] = useState('');
   const [newGroupId, setNewGroupId] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [isAddingStarters, setIsAddingStarters] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -126,6 +128,20 @@ export default function CategoriesScreen() {
       items: filtered.filter((c) => !c.groupId || !typeGroups.some((g) => g.id === c.groupId)),
     },
   ].filter((s) => s.id !== null || s.items.length > 0 || typeGroups.length === 0);
+
+  async function handleAddStarters() {
+    if (!accessToken) return;
+    setIsAddingStarters(true);
+    setActionError(null);
+    try {
+      await addStarterCategories(accessToken);
+      await fetchData();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to add starter categories');
+    } finally {
+      setIsAddingStarters(false);
+    }
+  }
 
   async function handleCreate() {
     if (!accessToken || !newName.trim()) return;
@@ -501,7 +517,19 @@ export default function CategoriesScreen() {
         {isLoading ? (
           <ActivityIndicator color={theme.primary} style={{ marginTop: 24 }} />
         ) : filtered.length === 0 ? (
-          <EmptyState message={`No ${activeType.toLowerCase()} categories yet. Add one above.`} />
+          <View style={{ gap: 10 }}>
+            <EmptyState message={`No ${activeType.toLowerCase()} categories yet. Add one above.`} />
+            {categories.length === 0 ? (
+              <Pressable
+                onPress={() => void handleAddStarters()}
+                disabled={isAddingStarters}
+                style={[styles.addButton, { backgroundColor: theme.primary, opacity: isAddingStarters ? 0.6 : 1 }]}>
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>
+                  {isAddingStarters ? 'Adding…' : 'Add starter categories'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
         ) : typeGroups.length === 0 ? (
           <View>{filtered.map(renderCategoryRow)}</View>
         ) : (
@@ -571,6 +599,7 @@ const styles = StyleSheet.create({
   createRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12, fontSize: 15 },
   addBtn: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  addButton: { borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
   outlineBtn: {
     borderWidth: 1,
     borderRadius: 12,

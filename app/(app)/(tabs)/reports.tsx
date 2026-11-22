@@ -213,6 +213,7 @@ function MonthlyReportView() {
             saving={report.totalSaving}
             investment={report.totalInvestment}
             debtRepayment={report.totalDebtRepayment}
+            debtRecovery={report.totalDebtRecovery}
           />
           {hasActivity ? (
             <>
@@ -290,7 +291,16 @@ function AnnualReportView() {
   );
 
   const hasActivityIn = (r: AnnualReport | null) =>
-    r?.monthlyTotals.some((m) => m.income + m.expense + m.saving + m.investment + m.debtRepayment > 0) ?? false;
+    r?.monthlyTotals.some(
+      (m) =>
+        m.income +
+          m.expense +
+          m.saving +
+          m.investment +
+          m.debtRepayment +
+          m.debtRecovery >
+        0,
+    ) ?? false;
 
   const hasActivity = hasActivityIn(report);
   const previousHasData = hasActivityIn(previousReport);
@@ -335,6 +345,7 @@ function AnnualReportView() {
             saving={report.totalSaving}
             investment={report.totalInvestment}
             debtRepayment={report.totalDebtRepayment}
+            debtRecovery={report.totalDebtRecovery}
             subtitle="How this year's income was used"
           />
           {hasActivity ? (

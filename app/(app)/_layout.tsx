@@ -32,6 +32,8 @@ export default function AppLayout() {
         name="transactions/new"
         options={{ headerShown: true, title: 'Add Transaction' }}
       />
+      <Stack.Screen name="budgets" options={{ headerShown: true, title: 'Budgets' }} />
+      <Stack.Screen name="settings" options={{ headerShown: true, title: 'Settings' }} />
       <Stack.Screen
         name="transactions/[id]"
         options={{ headerShown: true, title: 'Transaction' }}

@@ -1,6 +1,7 @@
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { useAuth } from '@/lib/auth-context';
 import { Link, useRouter } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -76,6 +77,16 @@ export default function LoginScreen() {
           />
 
           {error && <Text style={styles.error}>{error}</Text>}
+
+          <Pressable
+            onPress={() =>
+              void WebBrowser.openBrowserAsync('https://www.moneytracker365.com/forgot-password')
+            }
+            style={{ alignSelf: 'flex-end', marginTop: 10 }}>
+            <Text style={{ color: theme.primary, fontSize: 13, fontWeight: '600' }}>
+              Forgot password?
+            </Text>
+          </Pressable>
 
           <Pressable
             onPress={() => void handleLogin()}

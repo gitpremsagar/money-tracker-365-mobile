@@ -13,8 +13,8 @@ export function useThemeColors() {
     border: scheme === 'dark' ? '#27272a' : '#e4e4e7',
     muted: scheme === 'dark' ? '#a1a1aa' : '#71717a',
     background: scheme === 'dark' ? '#09090b' : '#fafafa',
-    primary: '#059669',
-    primaryDark: '#047857',
+    primary: '#047857',
+    primaryDark: '#065f46',
     danger: '#dc2626',
   };
 }

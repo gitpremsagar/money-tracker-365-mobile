@@ -5,11 +5,10 @@ import {
   deleteDebt,
   updateDebt,
   type Debt,
-  type DebtStatus,
   type DebtType,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { DEBT_COLORS, DEBT_STATUS_LABEL, DEBT_TYPE_LABEL } from '@/lib/format';
+import { DEBT_COLORS, DEBT_TYPE_LABEL } from '@/lib/format';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useRouter, type Href } from 'expo-router';
 import { useState } from 'react';
@@ -26,7 +25,6 @@ import {
 } from 'react-native';
 
 const TYPES: DebtType[] = ['TAKEN', 'GIVEN'];
-const STATUSES: DebtStatus[] = ['ACTIVE', 'SETTLED'];
 
 type Props = {
   debt?: Debt;
@@ -42,7 +40,6 @@ export default function DebtForm({ debt }: Props) {
   const [amount, setAmount] = useState(debt ? String(debt.amount) : '');
   const [description, setDescription] = useState(debt?.description ?? '');
   const [date, setDate] = useState(debt ? new Date(debt.date) : new Date());
-  const [status, setStatus] = useState<DebtStatus>(debt?.status ?? 'ACTIVE');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
 
@@ -79,7 +76,6 @@ export default function DebtForm({ debt }: Props) {
             amount: parsedAmount,
             description: description.trim() || null,
             date: isoDate,
-            status,
           },
           accessToken,
         );
@@ -271,35 +267,9 @@ export default function DebtForm({ debt }: Props) {
         )}
 
         {debt ? (
-          <>
-            <Text style={[styles.label, { color: theme.colors.text }]}>Status</Text>
-            <View style={styles.typeGrid}>
-              {STATUSES.map((item) => {
-                const selected = status === item;
-                return (
-                  <Pressable
-                    key={item}
-                    onPress={() => setStatus(item)}
-                    style={[
-                      styles.typeButton,
-                      {
-                        borderColor: selected ? theme.primary : theme.border,
-                        backgroundColor: selected ? `${theme.primary}15` : theme.card,
-                      },
-                    ]}>
-                    <Text
-                      style={{
-                        color: selected ? theme.primary : theme.muted,
-                        fontWeight: '600',
-                        fontSize: 13,
-                      }}>
-                      {DEBT_STATUS_LABEL[item]}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </>
+          <Text style={{ color: theme.muted, fontSize: 12, marginBottom: 12 }}>
+            Status is calculated automatically from recorded payments.
+          </Text>
         ) : null}
 
         <Text style={[styles.label, { color: theme.colors.text }]}>
